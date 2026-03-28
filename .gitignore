@@ -1,0 +1,7 @@
+.DS_Store
+.git_from_noise_template_backup/
+build/
+dep/
+dist/
+plugin.dylib
+*.vcvplugin

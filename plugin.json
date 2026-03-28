@@ -1,0 +1,20 @@
+{
+  "slug": "WaveFileVCO",
+  "name": "KSZ Wave File WT VCO",
+  "version": "0.1.0",
+  "license": "proprietary",
+  "brand": "KSZ",
+  "author": "lazuli",
+  "modules": [
+    {
+      "slug": "WaveFileVCO",
+      "name": "KSZ Wave File WT VCO",
+      "description": "Wavetable VCO sourced from regular WAV audio files (first 5s)",
+      "tags": [
+        "Oscillator",
+        "Wavetable",
+        "Polyphonic"
+      ]
+    }
+  ]
+}

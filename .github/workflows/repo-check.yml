@@ -1,0 +1,23 @@
+name: Repo Check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate plugin.json
+        run: python3 -m json.tool plugin.json > /dev/null
+
+      - name: Check required files
+        run: |
+          test -f Makefile
+          test -f src/plugin.cpp
+          test -f src/plugin.hpp
+          test -f src/NoiseVCO.cpp
+          test -f res/NoiseVCO.svg
+          test -f README.md
