@@ -18,6 +18,6 @@ jobs:
           test -f Makefile
           test -f src/plugin.cpp
           test -f src/plugin.hpp
-          test -f src/NoiseVCO.cpp
+          test -f src/SampleVCO.cpp
           test -f res/NoiseVCO.svg
           test -f README.md
