@@ -13,8 +13,8 @@ Poniżej prosty workflow dla dwóch maszyn (np. `Mac-mini` i `Laptop`) z jednym 
 ## 1) Pierwsza konfiguracja (na obu komputerach)
 
 ```bash
-git clone <YOUR_REPO_URL> /path/to/WaveFileVCO
-cd /path/to/WaveFileVCO
+git clone <YOUR_REPO_URL> /path/to/SAMPLE_VCO
+cd /path/to/SAMPLE_VCO
 ```
 
 ## 2) Build + instalacja lokalna

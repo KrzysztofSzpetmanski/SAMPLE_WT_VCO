@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -432,13 +433,11 @@ struct CloudsStyleReverb {
 	}
 };
 
-struct NoiseVCO : Module {
+struct SampleVCO : Module {
 	static constexpr int kMaxWavetableSize = 4096;
 	static constexpr int kMaxVoices = 10; // 1 + unison(0..9)
 	static constexpr int kGeneratedWavetableSize = 2048;
 	static constexpr int kMipLevels = 5; // 2048,1024,512,256,128
-	static constexpr int kMaxDensePoints = 48;
-	static constexpr int kMaxAnchorPoints = kMaxDensePoints + 2;
 	static constexpr float kTableTransitionTimeSec = 0.3f; // 300 ms
 	static constexpr float kControlUpdateIntervalSec = 0.002f; // 2 ms control scan
 
@@ -451,7 +450,6 @@ struct NoiseVCO : Module {
 		WT_SIZE_PARAM,
 		DENS_PARAM,
 		SMOTH_PARAM,
-		GEN_PARAM,
 		ENV_PARAM,
 		RVB_TIME_PARAM,
 		RVB_FB_PARAM,
@@ -466,7 +464,6 @@ struct NoiseVCO : Module {
 	enum InputIds {
 		VOCT_INPUT,
 		TRIG_INPUT,
-		GEN_TRIG_INPUT,
 		MORPH_CV_INPUT,
 		WT_SIZE_CV_INPUT,
 		DENS_CV_INPUT,
@@ -479,16 +476,12 @@ struct NoiseVCO : Module {
 		NUM_OUTPUTS
 	};
 	enum LightIds {
-		GEN_LIGHT,
 		MORPH_MOD_LIGHT,
 		WT_SIZE_MOD_LIGHT,
 		NUM_LIGHTS
 	};
 
-	dsp::SchmittTrigger genButtonTrigger;
-	dsp::SchmittTrigger genInputTrigger;
 	dsp::SchmittTrigger contourTrigger;
-	dsp::PulseGenerator genLightPulse;
 	std::mt19937 rng {0x4e565f43u};
 
 	std::array<float, kMaxWavetableSize> wtA {};
@@ -509,16 +502,8 @@ struct NoiseVCO : Module {
 	float lastScanNorm = 0.f;
 	int lastDense = 10;
 	int lastSmoth = 0; // 0..100
-	float tableBlend = 1.f;
-	bool pendingGenRequest = false;
-
-	std::array<int, kMaxAnchorPoints> wtAnchorIndex {};
-	std::array<float, kMaxAnchorPoints> wtAnchorA {};
-	std::array<float, kMaxAnchorPoints> wtAnchorB {};
-	int wtAnchorCount = 0;
-	std::array<int, kMaxDensePoints> denseMemoryIndex {};
-	std::array<float, kMaxDensePoints> denseMemoryA {};
-	std::array<float, kMaxDensePoints> denseMemoryB {};
+	std::atomic<float> tableBlend {1.f};
+	std::atomic<bool> pendingGenRequest {false};
 
 	std::array<float, kMaxVoices> phase {};
 	float controlUpdateTimer = 0.f;
@@ -538,12 +523,11 @@ struct NoiseVCO : Module {
 
 	mutable std::mutex wtMutex;
 
-	NoiseVCO() {
+	SampleVCO() {
 		config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
 
 		configInput(VOCT_INPUT, "V/Oct");
 		configInput(TRIG_INPUT, "Trigger");
-		configInput(GEN_TRIG_INPUT, "Jump trigger");
 		configInput(MORPH_CV_INPUT, "Scan CV");
 		configInput(WT_SIZE_CV_INPUT, "WT Size CV");
 		configInput(DENS_CV_INPUT, "Density CV");
@@ -561,11 +545,10 @@ struct NoiseVCO : Module {
 		configParam(MORPH_PARAM, 0.f, 1.f, 0.5f, "Scan");
 		auto* wtSizeQ = configParam(WT_SIZE_PARAM, 256.f, 2048.f, 1024.f, "WT size");
 		wtSizeQ->snapEnabled = true;
-		auto* densQ = configParam(DENS_PARAM, 1.f, 48.f, 10.f, "Density");
+		auto* densQ = configParam(DENS_PARAM, 0.f, 100.f, 100.f, "Density / simplify");
 		densQ->snapEnabled = true;
 		auto* smothQ = configParam(SMOTH_PARAM, 0.f, 100.f, 0.f, "Smooth");
 		smothQ->snapEnabled = true;
-		configButton(GEN_PARAM, "Jump");
 		configParam(ENV_PARAM, 0.f, 1.f, 1.f, "Envelope");
 		configParam<ReverbTimeSecondsQuantity>(RVB_TIME_PARAM, 0.f, 1.f, 0.4f, "Reverb time");
 		configParam(RVB_FB_PARAM, 0.f, 1.f, 0.45f, "Reverb feedback");
@@ -576,8 +559,7 @@ struct NoiseVCO : Module {
 		configParam(DENS_CV_DEPTH_PARAM, 0.f, 1.f, 1.f, "Density CV depth", "%", 0.f, 100.f);
 		configParam(SMOTH_CV_DEPTH_PARAM, 0.f, 1.f, 1.f, "Smooth CV depth", "%", 0.f, 100.f);
 
-		buildDenseMemoryIndices();
-		regenerateNoiseSources(false);
+		regenerateNoiseSources();
 		regenerateWavePair(computeDenseParam(), computeSmothParam());
 		rebuildMorphBaseTable(0.f);
 		rebuildPlaybackTable(wtSize);
@@ -658,7 +640,8 @@ struct NoiseVCO : Module {
 		float prev1 = readWavetableLevelSample(wtMorphPrevMip, wtMorphPrevMipSize, level1, ph);
 		float prev = sanitizeWaveSample(prev0 + (prev1 - prev0) * levelBlend);
 
-		return sanitizeWaveSample(prev + (curr - prev) * tableBlend);
+		float blend = clamp(tableBlend.load(std::memory_order_relaxed), 0.f, 1.f);
+		return sanitizeWaveSample(prev + (curr - prev) * blend);
 	}
 
 	float getModulatedKnobValue(float baseValue, int cvInputId, int depthParamId, float minV, float maxV) {
@@ -676,10 +659,6 @@ struct NoiseVCO : Module {
 		return getModulatedKnobValue(params[MORPH_PARAM].getValue(), MORPH_CV_INPUT, MORPH_CV_DEPTH_PARAM, 0.f, 1.f);
 	}
 
-	float computeMorphParam() {
-		return 0.f;
-	}
-
 	bool loadSourceWavPath(const std::string& path) {
 		std::vector<float> mono;
 		float sr = 0.f;
@@ -691,7 +670,7 @@ struct NoiseVCO : Module {
 			sourceSampleRate = 0.f;
 			sourcePath.clear();
 			sourceError = err;
-			pendingGenRequest = true;
+			pendingGenRequest.store(true, std::memory_order_relaxed);
 			return false;
 		}
 
@@ -701,7 +680,7 @@ struct NoiseVCO : Module {
 		sourceSampleRate = sr;
 		sourcePath = path;
 		sourceError.clear();
-		pendingGenRequest = true;
+		pendingGenRequest.store(true, std::memory_order_relaxed);
 		return true;
 	}
 
@@ -712,7 +691,7 @@ struct NoiseVCO : Module {
 		sourceSampleRate = 0.f;
 		sourcePath.clear();
 		sourceError.clear();
-		pendingGenRequest = true;
+		pendingGenRequest.store(true, std::memory_order_relaxed);
 	}
 
 	std::string getSourceStatusString() const {
@@ -729,9 +708,11 @@ struct NoiseVCO : Module {
 
 	void copySourceOverviewData(std::array<float, kMaxWavetableSize>& outData,
 	                            int& outSize,
-	                            float& outScanNorm) const {
+	                            float& outWindowStartNorm,
+	                            float& outWindowSpanNorm) const {
 		std::lock_guard<std::mutex> lock(wtMutex);
-		outScanNorm = clamp(lastScanNorm, 0.f, 1.f);
+		outWindowStartNorm = 0.f;
+		outWindowSpanNorm = 0.f;
 		if (!sourceLoaded || sourceMono.size() < 2) {
 			outSize = 0;
 			return;
@@ -740,6 +721,14 @@ struct NoiseVCO : Module {
 		const int displaySamples = 1024;
 		outSize = displaySamples;
 		const int srcSize = static_cast<int>(sourceMono.size());
+		int windowFrames = clamp(wtSize, 256, kGeneratedWavetableSize);
+		windowFrames = std::min(windowFrames, srcSize);
+		int maxStart = std::max(0, srcSize - windowFrames);
+		int start = static_cast<int>(std::lround(clamp(lastScanNorm, 0.f, 1.f) * static_cast<float>(maxStart)));
+		start = clamp(start, 0, maxStart);
+		outWindowStartNorm = (srcSize > 1) ? (static_cast<float>(start) / static_cast<float>(srcSize - 1)) : 0.f;
+		outWindowSpanNorm = clamp(static_cast<float>(windowFrames) / static_cast<float>(srcSize), 0.f, 1.f);
+
 		for (int i = 0; i < displaySamples; ++i) {
 			float t = static_cast<float>(i) / static_cast<float>(displaySamples - 1);
 			float pos = t * static_cast<float>(srcSize - 1);
@@ -792,8 +781,8 @@ struct NoiseVCO : Module {
 
 	int computeDenseParam() {
 		float v = getModulatedKnobValue(params[DENS_PARAM].getValue(), DENS_CV_INPUT,
-		                                DENS_CV_DEPTH_PARAM, 1.f, 48.f);
-		return clamp(static_cast<int>(std::round(v)), 1, 48);
+		                                DENS_CV_DEPTH_PARAM, 0.f, 100.f);
+		return clamp(static_cast<int>(std::round(v)), 0, 100);
 	}
 
 	int computeSmothParam() {
@@ -915,162 +904,101 @@ struct NoiseVCO : Module {
 		}
 	}
 
-	void buildDenseMemoryIndices() {
-		int prev = 0;
-		for (int i = 0; i < kMaxDensePoints; ++i) {
-			float t = static_cast<float>(i + 1) / static_cast<float>(kMaxDensePoints + 1);
-			int idx = static_cast<int>(std::lround(t * static_cast<float>(kGeneratedWavetableSize - 1)));
-			int remaining = kMaxDensePoints - 1 - i;
-			int maxAllowed = (kGeneratedWavetableSize - 2) - remaining;
-			idx = clamp(idx, prev, maxAllowed);
-			denseMemoryIndex[i] = idx;
-			prev = idx + 1;
-		}
-	}
-
-	void buildDenseAnchorIndices(int dens) {
-		int interiorCount = std::max(1, std::min(dens, kMaxDensePoints));
-		wtAnchorCount = interiorCount + 2;
-		wtAnchorIndex[0] = 0;
-		wtAnchorA[0] = 0.f;
-		wtAnchorB[0] = 0.f;
-
-		int prevMemory = -1;
-		for (int i = 0; i < interiorCount; ++i) {
-			float t = static_cast<float>(i + 1) / static_cast<float>(interiorCount + 1);
-			int mem = static_cast<int>(std::lround(t * static_cast<float>(kMaxDensePoints + 1))) - 1;
-			mem = clamp(mem, 0, kMaxDensePoints - 1);
-
-			int remaining = interiorCount - 1 - i;
-			int maxAllowed = (kMaxDensePoints - 1) - remaining;
-			mem = clamp(mem, prevMemory + 1, maxAllowed);
-			prevMemory = mem;
-
-			wtAnchorIndex[i + 1] = denseMemoryIndex[mem];
-			wtAnchorA[i + 1] = denseMemoryA[mem];
-			wtAnchorB[i + 1] = denseMemoryB[mem];
-		}
-		wtAnchorIndex[wtAnchorCount - 1] = kGeneratedWavetableSize - 1;
-		wtAnchorA[wtAnchorCount - 1] = 0.f;
-		wtAnchorB[wtAnchorCount - 1] = 0.f;
-	}
-
-	void regenerateNoiseSources(bool randomizeFromTrigger = false) {
+	void regenerateNoiseSources() {
+		float scan = computeScanParam();
 		std::lock_guard<std::mutex> lock(wtMutex);
-		if (sourceLoaded && sourceSampleRate > 1000.f && sourceMono.size() > 1024) {
-			int totalFrames = static_cast<int>(sourceMono.size());
-			int windowFrames = clamp(computeWavetableSize() * 2, 256, 8192);
-			windowFrames = std::min(windowFrames, std::max(64, totalFrames - 1));
-			int maxStart = std::max(0, totalFrames - windowFrames - 1);
-
-			float scan = computeScanParam();
-			if (randomizeFromTrigger) {
-				std::uniform_real_distribution<float> jitterDist(-0.18f, 0.18f);
-				scan = clamp(scan + jitterDist(rng), 0.f, 1.f);
-			}
-			scan = clamp(scan, 0.f, 1.f);
-			lastScanNorm = scan;
-
-			int startA = static_cast<int>(std::lround(scan * static_cast<float>(maxStart)));
-
-			for (int i = 0; i < kMaxDensePoints; ++i) {
-				float t = static_cast<float>(i + 1) / static_cast<float>(kMaxDensePoints + 1);
-				int off = static_cast<int>(std::lround(t * static_cast<float>(windowFrames - 1)));
-				int ia = clamp(startA + off, 0, totalFrames - 1);
-				denseMemoryA[i] = sanitizeWaveSample(sourceMono[ia]);
-				denseMemoryB[i] = denseMemoryA[i];
-			}
-			return;
-		}
-
-		lastScanNorm = computeScanParam();
-		std::uniform_real_distribution<float> dist(-1.f, 1.f);
-		for (int i = 0; i < kMaxDensePoints; ++i) {
-			denseMemoryA[i] = dist(rng);
-			denseMemoryB[i] = denseMemoryA[i];
-		}
-	}
-
-	void smoothAnchorsInPlace(std::array<float, kMaxAnchorPoints>& anchors, float smoth) {
-		if (wtAnchorCount <= 3 || smoth <= 0.f) {
-			return;
-		}
-
-		float sm = clamp(smoth, 0.f, 1.f);
-		std::array<float, kMaxAnchorPoints> original = anchors;
-		int interiorMax = wtAnchorCount - 2;
-		int radius = 1 + static_cast<int>(std::round(sm * 10.f));
-		radius = clamp(radius, 1, std::max(1, interiorMax - 1));
-		float sigma = std::max(0.5f, 0.35f * static_cast<float>(radius));
-		float twoSigma2 = 2.f * sigma * sigma;
-
-		for (int i = 1; i <= interiorMax; ++i) {
-			int from = std::max(1, i - radius);
-			int to = std::min(interiorMax, i + radius);
-			float sumW = 0.f;
-			float sumV = 0.f;
-			for (int j = from; j <= to; ++j) {
-				float d = static_cast<float>(std::abs(j - i));
-				float w = std::exp(-(d * d) / twoSigma2);
-				sumW += w;
-				sumV += w * original[j];
-			}
-
-			float filtered = (sumW > 1e-9f) ? (sumV / sumW) : original[i];
-			anchors[i] = sanitizeWaveSample(original[i] + (filtered - original[i]) * sm);
-		}
-
-		anchors[0] = 0.f;
-		anchors[wtAnchorCount - 1] = 0.f;
-	}
-
-	void renderDenseAnchorsToTable(const std::array<float, kMaxAnchorPoints>& anchors, int size,
-	                               float smoth, std::array<float, kMaxWavetableSize>& outTable) {
-		const float pi = 3.14159265359f;
-		float sm = clamp(smoth, 0.f, 1.f);
-		for (int seg = 0; seg < wtAnchorCount - 1; ++seg) {
-			int i0 = wtAnchorIndex[seg];
-			int i1 = wtAnchorIndex[seg + 1];
-			float y0 = anchors[seg];
-			float y1 = anchors[seg + 1];
-			int span = std::max(1, i1 - i0);
-
-			for (int i = i0; i <= i1; ++i) {
-				float t = static_cast<float>(i - i0) / static_cast<float>(span);
-				float linear = y0 + (y1 - y0) * t;
-				float smoothT = 0.5f - 0.5f * std::cos(pi * t);
-				float curved = y0 + (y1 - y0) * smoothT;
-				outTable[i] = linear + (curved - linear) * sm;
-			}
-		}
-
-		// Hard constraints from spec.
-		outTable[0] = 0.f;
-		outTable[size - 1] = 0.f;
-
-		float peak = 1e-6f;
-		for (int i = 0; i < size; ++i) {
-			peak = std::max(peak, std::abs(outTable[i]));
-		}
-		float invPeak = 1.f / peak;
-		for (int i = 0; i < size; ++i) {
-			outTable[i] = sanitizeWaveSample(outTable[i] * invPeak);
-		}
-		outTable[0] = 0.f;
-		outTable[size - 1] = 0.f;
+		lastScanNorm = clamp(scan, 0.f, 1.f);
 	}
 
 	void regenerateWavePair(int dens, int smoth) {
-		buildDenseAnchorIndices(dens);
-		lastDense = dens;
+		float smothF = clamp(smoth * 0.01f, 0.f, 1.f);
+		float densF = clamp(dens * 0.01f, 0.f, 1.f);
+		int windowFrames = computeWavetableSize();
+		windowFrames = clamp(windowFrames, 256, kGeneratedWavetableSize);
+		bool sourceReady = false;
+		std::array<float, kGeneratedWavetableSize> localWindow {};
+		{
+			std::lock_guard<std::mutex> lock(wtMutex);
+			sourceReady = sourceLoaded && sourceMono.size() > 2;
+			if (sourceReady) {
+				int srcSize = static_cast<int>(sourceMono.size());
+				windowFrames = std::min(windowFrames, srcSize);
+				int maxStart = std::max(0, srcSize - windowFrames);
+				float scanNorm = clamp(lastScanNorm, 0.f, 1.f);
+				int start = static_cast<int>(std::lround(scanNorm * static_cast<float>(maxStart)));
+				start = clamp(start, 0, maxStart);
+				for (int i = 0; i < windowFrames; ++i) {
+					localWindow[i] = sanitizeWaveSample(sourceMono[start + i]);
+				}
+			}
+		}
+		if (!sourceReady) {
+			std::uniform_real_distribution<float> dist(-1.f, 1.f);
+			for (int i = 0; i < windowFrames; ++i) {
+				localWindow[i] = dist(rng);
+			}
+		}
+
+		int truePoints = static_cast<int>(std::lround(64.f + densF * static_cast<float>(windowFrames - 64)));
+		truePoints = clamp(truePoints, 64, windowFrames);
+
+		std::array<int, kGeneratedWavetableSize> anchorIdx {};
+		int prev = 0;
+		for (int p = 0; p < truePoints; ++p) {
+			float t = (truePoints <= 1) ? 0.f : static_cast<float>(p) / static_cast<float>(truePoints - 1);
+			int idx = static_cast<int>(std::lround(t * static_cast<float>(windowFrames - 1)));
+			int remaining = truePoints - 1 - p;
+			int maxAllowed = (windowFrames - 1) - remaining;
+			idx = clamp(idx, prev, maxAllowed);
+			anchorIdx[p] = idx;
+			prev = idx + 1;
+		}
+
+		std::array<float, kGeneratedWavetableSize> simplified = localWindow;
+		const float pi = 3.14159265359f;
+		for (int p = 0; p < truePoints - 1; ++p) {
+			int i0 = anchorIdx[p];
+			int i1 = anchorIdx[p + 1];
+			float y0 = localWindow[i0];
+			float y1 = localWindow[i1];
+			int span = std::max(1, i1 - i0);
+			for (int i = i0; i <= i1; ++i) {
+				float t = static_cast<float>(i - i0) / static_cast<float>(span);
+				float linear = y0 + (y1 - y0) * t;
+				float sinusT = 0.5f - 0.5f * std::cos(pi * t);
+				float sinus = y0 + (y1 - y0) * sinusT;
+				simplified[i] = sanitizeWaveSample(linear + (sinus - linear) * smothF);
+			}
+		}
+		for (int p = 0; p < truePoints; ++p) {
+			int idx = anchorIdx[p];
+			simplified[idx] = localWindow[idx];
+		}
+		localWindow = simplified;
 
 		std::lock_guard<std::mutex> lock(wtMutex);
-		float smothF = clamp(smoth * 0.01f, 0.f, 1.f);
-		smoothAnchorsInPlace(wtAnchorA, smothF);
-		smoothAnchorsInPlace(wtAnchorB, smothF);
-		renderDenseAnchorsToTable(wtAnchorA, kGeneratedWavetableSize, smothF, wtA);
-		renderDenseAnchorsToTable(wtAnchorB, kGeneratedWavetableSize, smothF, wtB);
+		const float outDen = static_cast<float>(kGeneratedWavetableSize - 1);
+		const float srcDen = static_cast<float>(windowFrames - 1);
+		for (int i = 0; i < kGeneratedWavetableSize; ++i) {
+			float pos = (static_cast<float>(i) / outDen) * srcDen;
+			int i0 = static_cast<int>(std::floor(pos));
+			int i1 = std::min(i0 + 1, windowFrames - 1);
+			float frac = pos - static_cast<float>(i0);
+			float s0 = localWindow[i0];
+			float s1 = localWindow[i1];
+			wtA[i] = sanitizeWaveSample(s0 + (s1 - s0) * frac);
+		}
+
+		for (int i = 0; i < kGeneratedWavetableSize; ++i) {
+			wtB[i] = wtA[i];
+		}
+		wtA[0] = 0.f;
+		wtA[kGeneratedWavetableSize - 1] = 0.f;
+		wtB[0] = 0.f;
+		wtB[kGeneratedWavetableSize - 1] = 0.f;
 		lastSmoth = smoth;
+		lastDense = dens;
+		wtSize = windowFrames;
 	}
 
 	void rebuildMorphBaseTable(float morph) {
@@ -1117,21 +1045,12 @@ struct NoiseVCO : Module {
 
 	void rebuildPlaybackTable(int windowSize) {
 		const int outSize = kGeneratedWavetableSize;
-		const int localWtSize = clamp(windowSize, 256, kGeneratedWavetableSize);
-		const float outDenom = static_cast<float>(outSize - 1);
-		const float srcDenom = static_cast<float>(localWtSize - 1);
 		const float pi = 3.14159265359f;
+		const int localWtSize = clamp(windowSize, 256, kGeneratedWavetableSize);
 
 		std::lock_guard<std::mutex> lock(wtMutex);
 		for (int i = 0; i < outSize; ++i) {
-			float t = static_cast<float>(i) / outDenom;
-			float srcPos = t * srcDenom;
-			int i0 = static_cast<int>(std::floor(srcPos));
-			int i1 = std::min(i0 + 1, localWtSize - 1);
-			float frac = srcPos - static_cast<float>(i0);
-			float s0 = wtMorphBase[i0];
-			float s1 = wtMorphBase[i1];
-			wtMorph[i] = sanitizeWaveSample(s0 + (s1 - s0) * frac);
+			wtMorph[i] = sanitizeWaveSample(wtMorphBase[i]);
 		}
 
 		// Apply symmetric cosine edge window so start/end stay stable at WT SIZE changes.
@@ -1153,7 +1072,7 @@ struct NoiseVCO : Module {
 	void copyDisplayData(std::array<float, kMaxWavetableSize>& outData, int& outSize, float& outScan) const {
 		std::lock_guard<std::mutex> lock(wtMutex);
 		outSize = kGeneratedWavetableSize;
-		float blend = clamp(tableBlend, 0.f, 1.f);
+		float blend = clamp(tableBlend.load(std::memory_order_relaxed), 0.f, 1.f);
 		for (int i = 0; i < outSize; ++i) {
 			float prev = wtMorphPrev[i];
 			float curr = wtMorph[i];
@@ -1164,7 +1083,7 @@ struct NoiseVCO : Module {
 
 	void captureAudibleMorphTable(std::array<float, kMaxWavetableSize>& outData) {
 		const int outSize = kGeneratedWavetableSize;
-		float blend = clamp(tableBlend, 0.f, 1.f);
+		float blend = clamp(tableBlend.load(std::memory_order_relaxed), 0.f, 1.f);
 		for (int i = 0; i < outSize; ++i) {
 			float prev = wtMorphPrev[i];
 			float curr = wtMorph[i];
@@ -1178,16 +1097,15 @@ struct NoiseVCO : Module {
 		for (float& p : phase) {
 			p = 0.f;
 		}
-		buildDenseMemoryIndices();
-		regenerateNoiseSources(false);
+		regenerateNoiseSources();
 		regenerateWavePair(computeDenseParam(), computeSmothParam());
 		rebuildMorphBaseTable(0.f);
 		rebuildPlaybackTable(computeWavetableSize());
 		wtMorphPrev = wtMorph;
 		wtMorphPrevMip = wtMorphMip;
 		wtMorphPrevMipSize = wtMorphMipSize;
-		tableBlend = 1.f;
-		pendingGenRequest = false;
+		tableBlend.store(1.f, std::memory_order_relaxed);
+		pendingGenRequest.store(false, std::memory_order_relaxed);
 		controlUpdateTimer = 0.f;
 		contourEnvelope = 1.f;
 		float sr = previousSampleRate > 1.f ? previousSampleRate : 48000.f;
@@ -1220,42 +1138,25 @@ struct NoiseVCO : Module {
 		int targetSmoth = computeSmothParam();
 		float targetScan = computeScanParam();
 
-		bool needSeed = pendingGenRequest;
+		bool needSeed = pendingGenRequest.exchange(false, std::memory_order_relaxed);
 		bool sizeChanged = targetSize != wtSize;
 		bool scanChanged = std::abs(targetScan - lastScanNorm) > 1e-4f;
-		bool waveShapeChanged = needSeed || (targetDense != lastDense) || (targetSmoth != lastSmoth) ||
-		                        (wtAnchorCount < 3) || scanChanged;
+		bool waveShapeChanged = needSeed || sizeChanged || (targetDense != lastDense) || (targetSmoth != lastSmoth) || scanChanged;
 
 		if (sizeChanged || waveShapeChanged) {
 			captureAudibleMorphTable(wtMorphPrev);
 			rebuildMipmapsFromTable(wtMorphPrev, wtMorphPrevMip, wtMorphPrevMipSize);
 			if (waveShapeChanged) {
-				regenerateNoiseSources(needSeed);
+				regenerateNoiseSources();
 				regenerateWavePair(targetDense, targetSmoth);
 			}
 			rebuildMorphBaseTable(0.f);
 			rebuildPlaybackTable(targetSize);
-			tableBlend = 0.f;
+			tableBlend.store(0.f, std::memory_order_relaxed);
 		}
-
-		if (needSeed) {
-			genLightPulse.trigger(0.08f);
-		}
-		pendingGenRequest = false;
 	}
 
 	void process(const ProcessArgs& args) override {
-		bool genEvent = false;
-		if (genButtonTrigger.process(params[GEN_PARAM].getValue())) {
-			genEvent = true;
-		}
-		if (genInputTrigger.process(inputs[GEN_TRIG_INPUT].getVoltage())) {
-			genEvent = true;
-		}
-		if (genEvent) {
-			pendingGenRequest = true;
-		}
-
 		if (std::abs(args.sampleRate - previousSampleRate) > 1.f) {
 			previousSampleRate = args.sampleRate;
 			reverb.Init(args.sampleRate);
@@ -1364,15 +1265,14 @@ struct NoiseVCO : Module {
 		outL = sanitizeAudioOut(outL);
 		outR = sanitizeAudioOut(outR);
 
-		tableBlend = clamp(tableBlend + args.sampleTime / kTableTransitionTimeSec, 0.f, 1.f);
+		float blend = tableBlend.load(std::memory_order_relaxed);
+		blend = clamp(blend + args.sampleTime / kTableTransitionTimeSec, 0.f, 1.f);
+		tableBlend.store(blend, std::memory_order_relaxed);
 
 		outputs[LEFT_OUTPUT].setChannels(1);
 		outputs[RIGHT_OUTPUT].setChannels(1);
 		outputs[LEFT_OUTPUT].setVoltage(outL);
 		outputs[RIGHT_OUTPUT].setVoltage(outR);
-
-		float genLit = genLightPulse.process(args.sampleTime) ? 1.f : 0.f;
-		lights[GEN_LIGHT].setBrightness(genLit);
 
 		float morphMod = inputs[MORPH_CV_INPUT].isConnected() ? params[MORPH_CV_DEPTH_PARAM].getValue() : 0.f;
 		float sizeMod = inputs[WT_SIZE_CV_INPUT].isConnected() ? params[WT_SIZE_CV_DEPTH_PARAM].getValue() : 0.f;
@@ -1438,7 +1338,7 @@ struct PanelGridOverlay : TransparentWidget {
 };
 
 struct SourceOverviewDisplay : TransparentWidget {
-	NoiseVCO* moduleRef = nullptr;
+	SampleVCO* moduleRef = nullptr;
 
 	void draw(const DrawArgs& args) override {
 		nvgBeginPath(args.vg);
@@ -1456,15 +1356,30 @@ struct SourceOverviewDisplay : TransparentWidget {
 			return;
 		}
 
-		std::array<float, NoiseVCO::kMaxWavetableSize> src {};
+		std::array<float, SampleVCO::kMaxWavetableSize> src {};
 		int size = 0;
-		float scanNorm = 0.f;
-		moduleRef->copySourceOverviewData(src, size, scanNorm);
+		float windowStartNorm = 0.f;
+		float windowSpanNorm = 0.f;
+		moduleRef->copySourceOverviewData(src, size, windowStartNorm, windowSpanNorm);
 		if (size >= 2) {
+			float contentX = 3.f;
+			float contentW = box.size.x - 6.f;
+			float winX = contentX + clamp(windowStartNorm, 0.f, 1.f) * contentW;
+			float winW = clamp(windowSpanNorm, 0.f, 1.f) * contentW;
+			winW = clamp(winW, 1.5f, contentW);
+			if (winX + winW > contentX + contentW) {
+				winX = contentX + contentW - winW;
+			}
+
+			nvgBeginPath(args.vg);
+			nvgRoundedRect(args.vg, winX, 1.5f, winW, box.size.y - 3.f, 1.2f);
+			nvgFillColor(args.vg, nvgRGBA(14, 165, 233, 42));
+			nvgFill(args.vg);
+
 			nvgBeginPath(args.vg);
 			for (int i = 0; i < size; ++i) {
 				float t = static_cast<float>(i) / static_cast<float>(size - 1);
-				float x = t * (box.size.x - 6.f) + 3.f;
+				float x = t * contentW + contentX;
 				float y = (0.5f - 0.40f * src[i]) * (box.size.y - 6.f) + 3.f;
 				if (i == 0) {
 					nvgMoveTo(args.vg, x, y);
@@ -1476,20 +1391,20 @@ struct SourceOverviewDisplay : TransparentWidget {
 			nvgStrokeWidth(args.vg, 1.1f);
 			nvgStrokeColor(args.vg, nvgRGB(0x08, 0x9a, 0xb2));
 			nvgStroke(args.vg);
-		}
 
-		float markerX = 3.f + clamp(scanNorm, 0.f, 1.f) * (box.size.x - 6.f);
-		nvgBeginPath(args.vg);
-		nvgMoveTo(args.vg, markerX, 1.5f);
-		nvgLineTo(args.vg, markerX, box.size.y - 1.5f);
-		nvgStrokeWidth(args.vg, 1.8f);
-		nvgStrokeColor(args.vg, nvgRGB(0xef, 0x44, 0x44));
-		nvgStroke(args.vg);
+			float markerX = contentX + clamp(windowStartNorm, 0.f, 1.f) * contentW;
+			nvgBeginPath(args.vg);
+			nvgMoveTo(args.vg, markerX, 1.5f);
+			nvgLineTo(args.vg, markerX, box.size.y - 1.5f);
+			nvgStrokeWidth(args.vg, 1.8f);
+			nvgStrokeColor(args.vg, nvgRGB(0xef, 0x44, 0x44));
+			nvgStroke(args.vg);
+		}
 	}
 };
 
 struct WavetableDisplay : TransparentWidget {
-	NoiseVCO* moduleRef = nullptr;
+	SampleVCO* moduleRef = nullptr;
 
 	void draw(const DrawArgs& args) override {
 		nvgBeginPath(args.vg);
@@ -1507,7 +1422,7 @@ struct WavetableDisplay : TransparentWidget {
 			return;
 		}
 
-		std::array<float, NoiseVCO::kMaxWavetableSize> wt {};
+		std::array<float, SampleVCO::kMaxWavetableSize> wt {};
 		int size = 0;
 		float scanNorm = 0.f;
 		moduleRef->copyDisplayData(wt, size, scanNorm);
@@ -1545,7 +1460,7 @@ struct WavetableDisplay : TransparentWidget {
 };
 
 struct CvDepthKnob : RoundSmallBlackKnob {
-	NoiseVCO* moduleRef = nullptr;
+	SampleVCO* moduleRef = nullptr;
 	int depthParam = -1;
 	int cvInput = -1;
 	std::string depthMenuLabel = "CV depth";
@@ -1653,10 +1568,10 @@ struct CvDepthKnob : RoundSmallBlackKnob {
 	}
 };
 
-struct NoiseVCOWidget : ModuleWidget {
-	NoiseVCOWidget(NoiseVCO* module) {
+struct SampleVCOWidget : ModuleWidget {
+	SampleVCOWidget(SampleVCO* module) {
 		setModule(module);
-		setPanel(createPanel(asset::plugin(pluginInstance, "res/NoiseVCO.svg")));
+		setPanel(createPanel(asset::plugin(pluginInstance, "res/SampleVCO.svg")));
 
 			addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
@@ -1673,54 +1588,54 @@ struct NoiseVCOWidget : ModuleWidget {
 			wtDisplay->moduleRef = module;
 			addChild(wtDisplay);
 
-		auto* scanKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 16.0f)), module, NoiseVCO::MORPH_PARAM);
+		auto* scanKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 16.0f)), module, SampleVCO::MORPH_PARAM);
 		scanKnob->moduleRef = module;
-		scanKnob->depthParam = NoiseVCO::MORPH_CV_DEPTH_PARAM;
-		scanKnob->cvInput = NoiseVCO::MORPH_CV_INPUT;
+		scanKnob->depthParam = SampleVCO::MORPH_CV_DEPTH_PARAM;
+		scanKnob->cvInput = SampleVCO::MORPH_CV_INPUT;
 		scanKnob->depthMenuLabel = "SCAN CV depth";
 		addParam(scanKnob);
 
 		// 16 mm vertical spacing, anchored from the bottom row at y=85.
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 53.0f)), module, NoiseVCO::PITCH_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 53.0f)), module, NoiseVCO::DETUNE_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 53.0f)), module, NoiseVCO::UNISON_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 53.0f)), module, NoiseVCO::OCTAVE_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 53.0f)), module, SampleVCO::PITCH_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 53.0f)), module, SampleVCO::DETUNE_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 53.0f)), module, SampleVCO::UNISON_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 53.0f)), module, SampleVCO::OCTAVE_PARAM));
 
-			auto* densKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(24.0f, 69.0f)), module, NoiseVCO::DENS_PARAM);
+			auto* densKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(24.0f, 69.0f)), module, SampleVCO::DENS_PARAM);
 			densKnob->moduleRef = module;
-			densKnob->depthParam = NoiseVCO::DENS_CV_DEPTH_PARAM;
-			densKnob->cvInput = NoiseVCO::DENS_CV_INPUT;
+			densKnob->depthParam = SampleVCO::DENS_CV_DEPTH_PARAM;
+			densKnob->cvInput = SampleVCO::DENS_CV_INPUT;
 			densKnob->depthMenuLabel = "DENS CV depth";
 			addParam(densKnob);
 
-			auto* smothKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(38.0f, 69.0f)), module, NoiseVCO::SMOTH_PARAM);
+			auto* smothKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(38.0f, 69.0f)), module, SampleVCO::SMOTH_PARAM);
 			smothKnob->moduleRef = module;
-			smothKnob->depthParam = NoiseVCO::SMOTH_CV_DEPTH_PARAM;
-			smothKnob->cvInput = NoiseVCO::SMOTH_CV_INPUT;
+			smothKnob->depthParam = SampleVCO::SMOTH_CV_DEPTH_PARAM;
+			smothKnob->cvInput = SampleVCO::SMOTH_CV_INPUT;
 			smothKnob->depthMenuLabel = "SMOTH CV depth";
 			addParam(smothKnob);
 
-			auto* sizeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 69.0f)), module, NoiseVCO::WT_SIZE_PARAM);
+			auto* sizeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 69.0f)), module, SampleVCO::WT_SIZE_PARAM);
 			sizeKnob->moduleRef = module;
-			sizeKnob->depthParam = NoiseVCO::WT_SIZE_CV_DEPTH_PARAM;
-			sizeKnob->cvInput = NoiseVCO::WT_SIZE_CV_INPUT;
+			sizeKnob->depthParam = SampleVCO::WT_SIZE_CV_DEPTH_PARAM;
+			sizeKnob->cvInput = SampleVCO::WT_SIZE_CV_INPUT;
 			sizeKnob->depthMenuLabel = "WT SIZE CV depth";
 			addParam(sizeKnob);
 
-			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 85.0f)), module, NoiseVCO::ENV_PARAM));
-			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 85.0f)), module, NoiseVCO::RVB_TIME_PARAM));
-			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 85.0f)), module, NoiseVCO::RVB_FB_PARAM));
-			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 85.0f)), module, NoiseVCO::RVB_MIX_PARAM));
+			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 85.0f)), module, SampleVCO::ENV_PARAM));
+			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 85.0f)), module, SampleVCO::RVB_TIME_PARAM));
+			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 85.0f)), module, SampleVCO::RVB_FB_PARAM));
+			addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 85.0f)), module, SampleVCO::RVB_MIX_PARAM));
 
-			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 101.0f)), module, NoiseVCO::MORPH_CV_INPUT));
-			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 101.0f)), module, NoiseVCO::DENS_CV_INPUT));
-			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(38.0f, 101.0f)), module, NoiseVCO::SMOTH_CV_INPUT));
-			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(52.0f, 101.0f)), module, NoiseVCO::WT_SIZE_CV_INPUT));
+			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 101.0f)), module, SampleVCO::MORPH_CV_INPUT));
+			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 101.0f)), module, SampleVCO::DENS_CV_INPUT));
+			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(38.0f, 101.0f)), module, SampleVCO::SMOTH_CV_INPUT));
+			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(52.0f, 101.0f)), module, SampleVCO::WT_SIZE_CV_INPUT));
 
-			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 117.0f)), module, NoiseVCO::VOCT_INPUT));
-			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 117.0f)), module, NoiseVCO::TRIG_INPUT));
-			addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(38.0f, 117.0f)), module, NoiseVCO::LEFT_OUTPUT));
-			addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(52.0f, 117.0f)), module, NoiseVCO::RIGHT_OUTPUT));
+			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 117.0f)), module, SampleVCO::VOCT_INPUT));
+			addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 117.0f)), module, SampleVCO::TRIG_INPUT));
+			addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(38.0f, 117.0f)), module, SampleVCO::LEFT_OUTPUT));
+			addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(52.0f, 117.0f)), module, SampleVCO::RIGHT_OUTPUT));
 
 		auto addPanelLabel = [this](float xMm, float yMm, const char* txt, int size = 8, NVGcolor color = nvgRGB(0x0f, 0x17, 0x2a)) {
 			auto* l = createWidget<PanelLabel>(mm2px(Vec(xMm, yMm)));
@@ -1760,7 +1675,7 @@ struct NoiseVCOWidget : ModuleWidget {
 
 	void appendContextMenu(Menu* menu) override {
 		ModuleWidget::appendContextMenu(menu);
-		auto* m = dynamic_cast<NoiseVCO*>(module);
+		auto* m = dynamic_cast<SampleVCO*>(module);
 		if (!m) {
 			return;
 		}
@@ -1783,4 +1698,4 @@ struct NoiseVCOWidget : ModuleWidget {
 	}
 };
 
-Model* modelWaveFileVCO = createModel<NoiseVCO, NoiseVCOWidget>("WaveFileVCO");
+Model* modelWaveFileVCO = createModel<SampleVCO, SampleVCOWidget>("WaveFileVCO");

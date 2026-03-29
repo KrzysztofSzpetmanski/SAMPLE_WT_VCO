@@ -1,35 +1,29 @@
-# Wave File WT VCO - Status
+# Sample VCO - Status
 
 ## Data
-- Date: 2026-03-28
+- Date: 2026-03-29
 - Branch: `main`
-- Version: `2.0.0` (draft)
+- Version: `2.0.0`
 
 ## Zrobione
-- Skopiowany i uruchomiony szkielet modułu z poprzedniego projektu.
-- Podmiana źródła WT:
-  - z generatora noise
-  - na dane z pliku WAV (max 5s).
-- Dodany parser WAV (PCM 16/24/32 + float32, mix do mono).
-- Dodane menu modułu:
-  - `Load WAV...`
-  - `Clear WAV`
-- Dodana serializacja ścieżki WAV w patchu Rack (`dataToJson/dataFromJson`).
-- Zachowany tor audio i obróbka WT: morph, mipmap, hermite, unison, env, reverb.
+- Źródło WT: plik WAV (zwykły audio), limit do pierwszych 5 sekund.
+- Loader WAV: PCM 16/24/32 + float32, miks do mono.
+- Generator okna WT oparty o `SCAN` + `WT SIZE`.
+- `DENS` działa jako simplify (kontrola liczby punktów "prawdziwych").
+- `SMOTH` steruje charakterem interpolacji (liniowa -> sinusoidalna).
+- Dwa ekrany:
+  - overview całego WAV,
+  - podgląd finalnej WT.
 
-## Draft UX
-- `SCAN` i `SPAN` są aktualnie mapowane na istniejące gałki (dawne DENS/SMOTH).
-- `JUMP` wykonuje losowy skok pozycji dla nowego okna.
-- Status źródła (`WAV xx.xx s` / error / random) jest pokazywany na wyświetlaczu modułu.
+## Poprawki spójności i ryzyk (2026-03-29)
+- Naprawiony błąd off-by-one w mapowaniu `SCAN` do startu okna.
+- Marker na overview pokazuje realny start i szerokość aktualnego okna WT.
+- Usunięte kosztowne kopiowanie całego bufora 5s przy każdej regeneracji WT.
+- Usunięte race-condition na flagach między UI i audio (`pendingGenRequest`, `tableBlend`).
+- Usunięte martwe elementy po starym układzie (`JUMP/GEN`, stare helpery DENS).
+- Uporządkowane nazewnictwo kodu do `SampleVCO` i panelu `res/SampleVCO.svg`.
 
-## Następne kroki
-- Dodać 2-ekranowy podgląd:
-  - overview całego 5s pliku,
-  - zoom wybranego okna.
-- Rozdzielić kontrolę nawigacji od parametrów kształtu WT (docelowe dedykowane gałki).
-- Dodać opcjonalne snap/grid dla skanowania po oknach.
-- Strojenie mapowania `SPAN` i długości okna dla bardziej muzycznych rezultatów.
-
-## Ryzyka
-- Loader WAV jest customowy (nie zewnętrzna biblioteka), więc warto dołożyć testy na nietypowe pliki.
-- Długie ścieżki/plik usunięty po zapisie patcha: moduł wraca do fallback random.
+## Otwarte tematy
+- Dalsze strojenie mapowania `DENS/SMOTH` pod odsłuch i zakresy muzyczne.
+- Możliwy dodatkowy debug overlay (wartości `truePoints`, start okna) do szybkiego strojenia.
+- Do sprawdzenia eksperymentalny tryb `native wtSize` (bez stałego 2048), jako opcja obok aktualnego trybu HQ.
