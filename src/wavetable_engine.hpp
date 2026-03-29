@@ -12,16 +12,24 @@
 class WavetableEngine {
 public:
 	static constexpr int kMaxWavetableSize = 4096;
-	static constexpr int kGeneratedWavetableSize = 2048;
+	static constexpr int kGeneratedWavetableSize = 512;
 	static constexpr int kMipLevels = 5;
+	static constexpr int kModeCount = 4;
+
+	enum Mode {
+		MODE_FREE = 0,
+		MODE_CYCLE_AC = 1,
+		MODE_CYCLE_ZC = 2,
+		MODE_CYCLE_AVG2 = 3
+	};
 
 	WavetableEngine();
 	~WavetableEngine();
 
-	void init(int wtSize, int dens, int smoth, float scanNorm);
-	void forceRebuild(int wtSize, int dens, int smoth, float scanNorm);
+	void init(int wtSize, int dens, int smoth, float scanNorm, int mode);
+	void forceRebuild(int wtSize, int dens, int smoth, float scanNorm, int mode);
 	void setSource(const std::shared_ptr<const std::vector<float>>& sourcePtr);
-	void setTargets(int wtSize, int dens, int smoth, float scanNorm);
+	void setTargets(int wtSize, int dens, int smoth, float scanNorm, int mode);
 	void updateControl();
 	void advanceBlend(float sampleTime, float transitionTimeSec);
 
@@ -29,13 +37,14 @@ public:
 	void copyDisplayData(std::array<float, kMaxWavetableSize>& outData, int& outSize, float& outScan) const;
 	int getPublishedWtSize() const;
 	float getPublishedScanNorm() const;
+	static const char* modeToShortLabel(int mode);
 
 private:
 	struct WavetableState {
 		std::array<float, kGeneratedWavetableSize> wave {};
 		std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels> mip {};
 		std::array<int, kMipLevels> mipSize {};
-		int wtSize = 1024;
+		int wtSize = 512;
 		float scanNorm = 0.f;
 	};
 
@@ -53,9 +62,10 @@ private:
 	                    int dens,
 	                    int smoth,
 	                    float scanNorm,
+	                    int mode,
 	                    const std::shared_ptr<const std::vector<float>>& sourcePtr);
 	int acquireBuildSlot() const;
-	void submitBuildRequest(int wtSize, int dens, int smoth, float scanNorm);
+	void submitBuildRequest(int wtSize, int dens, int smoth, float scanNorm, int mode);
 	void startWorkerThread();
 	void stopWorkerThread();
 	void publishUiDisplayWave();
@@ -70,10 +80,12 @@ private:
 	int requestedDense = -1;
 	int requestedSmoth = -1;
 	float requestedScanNorm = -1.f;
-	std::atomic<int> buildReqWtSize {1024};
+	int requestedMode = MODE_FREE;
+	std::atomic<int> buildReqWtSize {512};
 	std::atomic<int> buildReqDense {100};
 	std::atomic<int> buildReqSmoth {0};
 	std::atomic<float> buildReqScanNorm {0.f};
+	std::atomic<int> buildReqMode {MODE_FREE};
 	std::atomic<uint64_t> buildReqRevision {0};
 	std::atomic<bool> workerRunning {false};
 	std::thread workerThread;
@@ -82,6 +94,6 @@ private:
 	std::array<std::array<float, kGeneratedWavetableSize>, 2> uiDisplayWave {};
 	std::atomic<int> uiDisplayWaveIndex {0};
 	std::atomic<float> uiScanNorm {0.f};
-	std::atomic<int> uiWtSize {1024};
+	std::atomic<int> uiWtSize {512};
 	std::atomic<float> tableBlend {1.f};
 };

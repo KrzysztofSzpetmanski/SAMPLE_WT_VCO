@@ -36,6 +36,7 @@ struct SampleVCO : Module {
 		WT_SIZE_CV_DEPTH_PARAM,
 		DENS_CV_DEPTH_PARAM,
 		SMOTH_CV_DEPTH_PARAM,
+		MODE_PUSH_PARAM,
 		NUM_PARAMS
 	};
 	enum InputIds {
@@ -69,6 +70,7 @@ struct SampleVCO : Module {
 	                           float& outWindowSpanNorm) const;
 	void copyDisplayData(std::array<float, kMaxWavetableSize>& outData, int& outSize, float& outScan) const;
 	int getPublishedWtSize() const;
+	const char* getWorkModeLabel() const;
 	float getModulatedKnobValue(float baseValue, int cvInputId, int depthParamId, float minV, float maxV);
 
 	void onReset() override;
@@ -83,14 +85,17 @@ private:
 	int computeSmothParam();
 	float computeEnvParam();
 	float processEnvEnvelope(float trigVoltage, bool trigPatched, float env, float sampleTime);
+	void updateModeSwitch();
 	void updateTablesIfNeeded();
 	static float sanitizeAudioOut(float v);
 
 	dsp::SchmittTrigger contourTrigger;
+	dsp::SchmittTrigger modeButtonTrigger;
 	std::array<float, kMaxVoices> phase {};
 	float controlUpdateTimer = 0.f;
 	float contourEnvelope = 1.f;
 	float previousSampleRate = 0.f;
+	int workMode = WavetableEngine::MODE_FREE;
 
 	WavetableEngine wavetableEngine;
 	reverb_stage::ReverbStage reverbStage;

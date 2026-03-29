@@ -145,7 +145,10 @@ struct WavetableDisplay : TransparentWidget {
 			nvgFontSize(args.vg, 9.f);
 			nvgFillColor(args.vg, nvgRGB(0x1f, 0x29, 0x37));
 			nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
-			std::string info = rack::string::f("WT %d  SC %.2f  %s", moduleRef->getPublishedWtSize(), scanNorm,
+			std::string info = rack::string::f("WT %d  SC %.2f  %s  %s",
+			                                   moduleRef->getPublishedWtSize(),
+			                                   scanNorm,
+			                                   moduleRef->getWorkModeLabel(),
 			                                   moduleRef->getSourceStatusString().c_str());
 			nvgText(args.vg, 5.f, 4.f, info.c_str(), nullptr);
 		}
@@ -287,6 +290,7 @@ struct SampleVCOWidget : ModuleWidget {
 		scanKnob->cvInput = SampleVCO::MORPH_CV_INPUT;
 		scanKnob->depthMenuLabel = "SCAN CV depth";
 		addParam(scanKnob);
+		addParam(createParamCentered<TL1105>(mm2px(Vec(52.0f, 30.0f)), module, SampleVCO::MODE_PUSH_PARAM));
 
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 53.0f)), module, SampleVCO::PITCH_PARAM));
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 53.0f)), module, SampleVCO::DETUNE_PARAM));
@@ -339,6 +343,7 @@ struct SampleVCOWidget : ModuleWidget {
 
 		addPanelLabel(30.5f, 8.0f, "SAMPLE VCO", 10, nvgRGB(0x0b, 0x12, 0x20));
 		addPanelLabel(52.0f, 10.0f, "SCAN", 8);
+		addPanelLabel(52.0f, 24.0f, "MODE", 8);
 
 		addPanelLabel(10.0f, 47.0f, "PITCH", 7, nvgRGB(0x1f, 0x29, 0x37));
 		addPanelLabel(24.0f, 47.0f, "DETUNE", 7, nvgRGB(0x1f, 0x29, 0x37));

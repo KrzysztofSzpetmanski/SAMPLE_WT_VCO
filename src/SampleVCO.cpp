@@ -65,7 +65,7 @@ SampleVCO::SampleVCO() {
 	auto* octaveQ = configParam(OCTAVE_PARAM, -3.f, 3.f, 0.f, "Octave shift", " oct");
 	octaveQ->snapEnabled = true;
 	configParam(MORPH_PARAM, 0.f, 1.f, 0.5f, "Scan");
-	auto* wtSizeQ = configParam(WT_SIZE_PARAM, 256.f, 2048.f, 1024.f, "WT size");
+	auto* wtSizeQ = configParam(WT_SIZE_PARAM, 256.f, 512.f, 512.f, "WT size");
 	wtSizeQ->snapEnabled = true;
 	auto* densQ = configParam(DENS_PARAM, 0.f, 100.f, 100.f, "Density / simplify");
 	densQ->snapEnabled = true;
@@ -80,12 +80,14 @@ SampleVCO::SampleVCO() {
 	configParam(WT_SIZE_CV_DEPTH_PARAM, 0.f, 1.f, 1.f, "WT Size CV depth", "%", 0.f, 100.f);
 	configParam(DENS_CV_DEPTH_PARAM, 0.f, 1.f, 1.f, "Density CV depth", "%", 0.f, 100.f);
 	configParam(SMOTH_CV_DEPTH_PARAM, 0.f, 1.f, 1.f, "Smooth CV depth", "%", 0.f, 100.f);
+	configButton(MODE_PUSH_PARAM, "Mode switch");
 
 	wavetableEngine.init(
 		computeWavetableSize(),
 		computeDenseParam(),
 		computeSmothParam(),
-		clamp(computeScanParam(), 0.f, 1.f)
+		clamp(computeScanParam(), 0.f, 1.f),
+		workMode
 	);
 	reverbStage.reset(48000.f);
 }
@@ -114,8 +116,8 @@ float SampleVCO::computeScanParam() {
 
 int SampleVCO::computeWavetableSize() {
 	float v = getModulatedKnobValue(params[WT_SIZE_PARAM].getValue(), WT_SIZE_CV_INPUT,
-	                                WT_SIZE_CV_DEPTH_PARAM, 256.f, 2048.f);
-	return clamp(static_cast<int>(std::round(v)), 256, 2048);
+	                                WT_SIZE_CV_DEPTH_PARAM, 256.f, 512.f);
+	return clamp(static_cast<int>(std::round(v)), 256, 512);
 }
 
 int SampleVCO::computeDenseParam() {
@@ -280,6 +282,16 @@ int SampleVCO::getPublishedWtSize() const {
 	return wavetableEngine.getPublishedWtSize();
 }
 
+const char* SampleVCO::getWorkModeLabel() const {
+	return WavetableEngine::modeToShortLabel(workMode);
+}
+
+void SampleVCO::updateModeSwitch() {
+	if (modeButtonTrigger.process(params[MODE_PUSH_PARAM].getValue())) {
+		workMode = (workMode + 1) % WavetableEngine::kModeCount;
+	}
+}
+
 void SampleVCO::onReset() {
 	for (float& p : phase) {
 		p = 0.f;
@@ -288,7 +300,8 @@ void SampleVCO::onReset() {
 		computeWavetableSize(),
 		computeDenseParam(),
 		computeSmothParam(),
-		clamp(computeScanParam(), 0.f, 1.f)
+		clamp(computeScanParam(), 0.f, 1.f),
+		workMode
 	);
 	controlUpdateTimer = 0.f;
 	contourEnvelope = 1.f;
@@ -304,17 +317,31 @@ json_t* SampleVCO::dataToJson() {
 			json_object_set_new(rootJ, "sourcePath", json_string(sourcePath.c_str()));
 		}
 	}
+	json_object_set_new(rootJ, "workMode", json_integer(workMode));
 	return rootJ;
 }
 
 void SampleVCO::dataFromJson(json_t* rootJ) {
+	json_t* workModeJ = json_object_get(rootJ, "workMode");
+	if (json_is_integer(workModeJ)) {
+		workMode = clamp(static_cast<int>(json_integer_value(workModeJ)), 0, WavetableEngine::kModeCount - 1);
+	}
 	json_t* sourcePathJ = json_object_get(rootJ, "sourcePath");
 	if (json_is_string(sourcePathJ)) {
 		loadSourceWavPath(json_string_value(sourcePathJ));
 	}
+	wavetableEngine.forceRebuild(
+		computeWavetableSize(),
+		computeDenseParam(),
+		computeSmothParam(),
+		clamp(computeScanParam(), 0.f, 1.f),
+		workMode
+	);
 }
 
 void SampleVCO::updateTablesIfNeeded() {
+	updateModeSwitch();
+
 	if (sourcePendingDirty.exchange(false, std::memory_order_relaxed)) {
 		auto pending = std::atomic_load_explicit(&sourceMonoPending, std::memory_order_acquire);
 		wavetableEngine.setSource(pending);
@@ -324,7 +351,8 @@ void SampleVCO::updateTablesIfNeeded() {
 		computeWavetableSize(),
 		computeDenseParam(),
 		computeSmothParam(),
-		clamp(computeScanParam(), 0.f, 1.f)
+		clamp(computeScanParam(), 0.f, 1.f),
+		workMode
 	);
 	wavetableEngine.updateControl();
 }
