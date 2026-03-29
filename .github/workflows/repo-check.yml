@@ -19,5 +19,5 @@ jobs:
           test -f src/plugin.cpp
           test -f src/plugin.hpp
           test -f src/SampleVCO.cpp
-          test -f res/NoiseVCO.svg
+          test -f res/SampleVCO.svg
           test -f README.md
