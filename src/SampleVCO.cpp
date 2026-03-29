@@ -9,11 +9,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <chrono>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 #include <osdialog.h>
 
@@ -242,197 +245,6 @@ static bool loadWavMonoLimited5s(const std::string& path,
 	return true;
 }
 
-struct CloudsStyleReverb {
-	static constexpr int kMemorySize = 16384;
-	static constexpr int kMemoryMask = kMemorySize - 1;
-	static constexpr float kTwoPi = 6.28318530718f;
-
-	struct DelayLineSpec {
-		int base;
-		int length;
-	};
-
-	const DelayLineSpec ap1 {0, 113};
-	const DelayLineSpec ap2 {114, 162};
-	const DelayLineSpec ap3 {277, 241};
-	const DelayLineSpec ap4 {519, 399};
-	const DelayLineSpec dap1a {919, 1653};
-	const DelayLineSpec dap1b {2573, 2038};
-	const DelayLineSpec del1 {4612, 3411};
-	const DelayLineSpec dap2a {8024, 1913};
-	const DelayLineSpec dap2b {9938, 1663};
-	const DelayLineSpec del2 {11602, 4782};
-
-	std::array<float, kMemorySize> memory {};
-	int writePtr = 0;
-	float sampleRate = 48000.f;
-
-	float lfoPhase1 = 0.f;
-	float lfoPhase2 = 0.f;
-	float lfoFreq1 = 0.5f;
-	float lfoFreq2 = 0.3f;
-
-	float amount = 0.f;
-	float inputGain = 0.25f;
-	float reverbTime = 0.7f;
-	float diffusion = 0.625f;
-	float lp = 0.7f;
-	float lpDecay1 = 0.f;
-	float lpDecay2 = 0.f;
-
-	void init(float sr) {
-		sampleRate = std::max(sr, 1000.f);
-		clear();
-	}
-
-	void clear() {
-		memory.fill(0.f);
-		writePtr = 0;
-		lfoPhase1 = 0.f;
-		lfoPhase2 = 0.f;
-		lpDecay1 = 0.f;
-		lpDecay2 = 0.f;
-	}
-
-	void set_amount(float v) {
-		amount = clamp(v, 0.f, 1.f);
-	}
-
-	void set_input_gain(float v) {
-		inputGain = clamp(v, 0.f, 1.f);
-	}
-
-	void set_time(float v) {
-		reverbTime = clamp(v, 0.f, 0.995f);
-	}
-
-	void set_diffusion(float v) {
-		diffusion = clamp(v, 0.f, 0.95f);
-	}
-
-	void set_lp(float v) {
-		lp = clamp(v, 0.f, 0.999f);
-	}
-
-	int delayIndex(const DelayLineSpec& d, int offset) const {
-		int off = offset;
-		if (off < 0) {
-			off = d.length - 1;
-		}
-		else if (off >= d.length) {
-			off = d.length - 1;
-		}
-		return (writePtr + d.base + off) & kMemoryMask;
-	}
-
-	float delayRead(const DelayLineSpec& d, int offset) const {
-		return memory[delayIndex(d, offset)];
-	}
-
-	float delayReadInterp(const DelayLineSpec& d, float offset) const {
-		float o = clamp(offset, 0.f, static_cast<float>(d.length - 2));
-		int oi = static_cast<int>(std::floor(o));
-		float frac = o - static_cast<float>(oi);
-		float a = memory[(writePtr + d.base + oi) & kMemoryMask];
-		float b = memory[(writePtr + d.base + oi + 1) & kMemoryMask];
-		return a + (b - a) * frac;
-	}
-
-	void delayWrite(const DelayLineSpec& d, int offset, float value) {
-		if (!std::isfinite(value)) {
-			value = 0.f;
-		}
-		// Clouds stores internal reverb state with much larger headroom than +/-1.
-		// Keep generous range to avoid premature clipping/alias-like hash.
-		memory[delayIndex(d, offset)] = clamp(value, -8.f, 8.f);
-	}
-
-	void tickLfos() {
-		float f1 = lfoFreq1 / sampleRate;
-		float f2 = lfoFreq2 / sampleRate;
-		lfoPhase1 += f1;
-		lfoPhase2 += f2;
-		if (lfoPhase1 >= 1.f) {
-			lfoPhase1 -= 1.f;
-		}
-		if (lfoPhase2 >= 1.f) {
-			lfoPhase2 -= 1.f;
-		}
-	}
-
-	void process(float& inOutL, float& inOutR) {
-		if (amount <= 1e-4f) {
-			return;
-		}
-
-		--writePtr;
-		if (writePtr < 0) {
-			writePtr += kMemorySize;
-		}
-		tickLfos();
-
-		float lfo1 = std::cos(kTwoPi * lfoPhase1);
-		float lfo2 = std::cos(kTwoPi * lfoPhase2);
-
-		const float kap = diffusion;
-		const float klp = lp;
-		const float krt = reverbTime;
-		const float gain = inputGain;
-
-		float apout = 0.f;
-		float wet = 0.f;
-		float lp1 = lpDecay1;
-		float lp2 = lpDecay2;
-
-		auto allpassClouds = [this](const DelayLineSpec& d,
-		                            float x,
-		                            float readScale,
-		                            float writeScale,
-		                            int writeOffset = 0) {
-			float delayed = delayRead(d, -1);
-			float acc = x + delayed * readScale;
-			delayWrite(d, writeOffset, acc);
-			return acc * writeScale + delayed;
-		};
-
-		float acc = delayReadInterp(ap1, 10.f + lfo1 * 60.f);
-		delayWrite(ap1, 100, acc);
-		acc = (inOutL + inOutR) * gain + acc;
-
-		acc = allpassClouds(ap1, acc, kap, -kap);
-		acc = allpassClouds(ap2, acc, kap, -kap);
-		acc = allpassClouds(ap3, acc, kap, -kap);
-		acc = allpassClouds(ap4, acc, kap, -kap);
-		apout = acc;
-
-		acc = apout + delayReadInterp(del2, 4680.f + lfo2 * 100.f) * krt;
-		lp1 += klp * (acc - lp1);
-		acc = lp1;
-		acc = allpassClouds(dap1a, acc, -kap, kap);
-		acc = allpassClouds(dap1b, acc, kap, -kap);
-		delayWrite(del1, 0, acc);
-		acc *= 2.f;
-		wet = acc;
-		inOutL += (wet - inOutL) * amount;
-
-		acc = apout + delayRead(del1, -1) * krt;
-		lp2 += klp * (acc - lp2);
-		acc = lp2;
-		acc = allpassClouds(dap2a, acc, kap, -kap);
-		acc = allpassClouds(dap2b, acc, -kap, kap);
-		delayWrite(del2, 0, acc);
-		acc *= 2.f;
-		wet = acc;
-		inOutR += (wet - inOutR) * amount;
-
-		lpDecay1 = lp1;
-		lpDecay2 = lp2;
-
-		inOutL = clamp(inOutL, -10.f, 10.f);
-		inOutR = clamp(inOutR, -10.f, 10.f);
-	}
-};
-
 struct SampleVCO : Module {
 	static constexpr int kMaxWavetableSize = 4096;
 	static constexpr int kMaxVoices = 10; // 1 + unison(0..9)
@@ -484,26 +296,31 @@ struct SampleVCO : Module {
 	dsp::SchmittTrigger contourTrigger;
 	std::mt19937 rng {0x4e565f43u};
 
-	std::array<float, kMaxWavetableSize> wtA {};
-	std::array<float, kMaxWavetableSize> wtB {};
-	// Base morph table (A<->B) always rendered at fixed 2048 samples.
-	std::array<float, kMaxWavetableSize> wtMorphBase {};
-	// Active playback table after WT SIZE crop+resample+windowing.
-	std::array<float, kMaxWavetableSize> wtMorph {};
-	// Previous playback table for output/display crossfade.
-	std::array<float, kMaxWavetableSize> wtMorphPrev {};
-	// Band-limited mipmap pyramids for current and previous tables.
-	std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels> wtMorphMip {};
-	std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels> wtMorphPrevMip {};
-	std::array<int, kMipLevels> wtMorphMipSize {};
-	std::array<int, kMipLevels> wtMorphPrevMipSize {};
-	int wtSize = 1024;
-	float lastMorph = 0.f;
-	float lastScanNorm = 0.f;
-	int lastDense = 10;
-	int lastSmoth = 0; // 0..100
 	std::atomic<float> tableBlend {1.f};
-	std::atomic<bool> pendingGenRequest {false};
+
+	struct WavetableState {
+		std::array<float, kGeneratedWavetableSize> wave {};
+		std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels> mip {};
+		std::array<int, kMipLevels> mipSize {};
+		int wtSize = 1024;
+		float scanNorm = 0.f;
+	};
+
+	std::array<WavetableState, 3> wavetableStates {};
+	std::atomic<int> activeStateIndex {0};
+	std::atomic<int> prevStateIndex {0};
+	std::atomic<int> readyStateIndex {-1};
+	int requestedWtSize = -1;
+	int requestedDense = -1;
+	int requestedSmoth = -1;
+	float requestedScanNorm = -1.f;
+	std::atomic<int> buildReqWtSize {1024};
+	std::atomic<int> buildReqDense {100};
+	std::atomic<int> buildReqSmoth {0};
+	std::atomic<float> buildReqScanNorm {0.f};
+	std::atomic<uint64_t> buildReqRevision {0};
+	std::atomic<bool> workerRunning {false};
+	std::thread workerThread;
 
 	std::array<float, kMaxVoices> phase {};
 	float controlUpdateTimer = 0.f;
@@ -515,13 +332,19 @@ struct SampleVCO : Module {
 	float reverbWetHpOutL = 0.f;
 	float reverbWetHpOutR = 0.f;
 	daisysp::ReverbSc reverb;
-	std::vector<float> sourceMono;
-	float sourceSampleRate = 0.f;
+	std::shared_ptr<const std::vector<float>> sourceMonoActive;
+	std::shared_ptr<const std::vector<float>> sourceMonoPending;
+	std::shared_ptr<const std::vector<float>> sourceMonoUi;
+	std::atomic<bool> sourcePendingDirty {false};
+	std::atomic<float> sourceSampleRate {0.f};
+	std::atomic<bool> sourceLoaded {false};
 	std::string sourcePath;
 	std::string sourceError;
-	bool sourceLoaded = false;
-
-	mutable std::mutex wtMutex;
+	mutable std::mutex sourceMetaMutex;
+	std::array<std::array<float, kGeneratedWavetableSize>, 2> uiDisplayWave {};
+	std::atomic<int> uiDisplayWaveIndex {0};
+	std::atomic<float> uiScanNorm {0.f};
+	std::atomic<int> uiWtSize {1024};
 
 	SampleVCO() {
 		config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
@@ -559,16 +382,29 @@ struct SampleVCO : Module {
 		configParam(DENS_CV_DEPTH_PARAM, 0.f, 1.f, 1.f, "Density CV depth", "%", 0.f, 100.f);
 		configParam(SMOTH_CV_DEPTH_PARAM, 0.f, 1.f, 1.f, "Smooth CV depth", "%", 0.f, 100.f);
 
-		regenerateNoiseSources();
-		regenerateWavePair(computeDenseParam(), computeSmothParam());
-		rebuildMorphBaseTable(0.f);
-		rebuildPlaybackTable(wtSize);
-		wtMorphPrev = wtMorph;
-		wtMorphPrevMip = wtMorphMip;
-		wtMorphPrevMipSize = wtMorphMipSize;
+		buildTableState(
+			wavetableStates[0],
+			computeWavetableSize(),
+			computeDenseParam(),
+			computeSmothParam(),
+			clamp(computeScanParam(), 0.f, 1.f),
+			std::shared_ptr<const std::vector<float>> {}
+		);
+		wavetableStates[1] = wavetableStates[0];
+		wavetableStates[2] = wavetableStates[0];
+		activeStateIndex.store(0, std::memory_order_relaxed);
+		prevStateIndex.store(0, std::memory_order_relaxed);
+		readyStateIndex.store(-1, std::memory_order_relaxed);
+		publishUiDisplayWave();
+		submitBuildRequest(computeWavetableSize(), computeDenseParam(), computeSmothParam(), clamp(computeScanParam(), 0.f, 1.f));
+		startWorkerThread();
 		reverb.Init(48000.f);
 		updateReverbWetHighpass(48000.f);
 		resetReverbWetHighpass();
+	}
+
+	~SampleVCO() override {
+		stopWorkerThread();
 	}
 
 	float readWavetableLevelSample(const std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels>& mip,
@@ -632,12 +468,17 @@ struct SampleVCO : Module {
 		float levelBlend = 0.f;
 		selectMipLevels(freq, level0, level1, levelBlend);
 
-		float curr0 = readWavetableLevelSample(wtMorphMip, wtMorphMipSize, level0, ph);
-		float curr1 = readWavetableLevelSample(wtMorphMip, wtMorphMipSize, level1, ph);
+		int activeIdx = activeStateIndex.load(std::memory_order_acquire);
+		int prevIdx = prevStateIndex.load(std::memory_order_acquire);
+		const WavetableState& active = wavetableStates[activeIdx];
+		const WavetableState& prevState = wavetableStates[prevIdx];
+
+		float curr0 = readWavetableLevelSample(active.mip, active.mipSize, level0, ph);
+		float curr1 = readWavetableLevelSample(active.mip, active.mipSize, level1, ph);
 		float curr = sanitizeWaveSample(curr0 + (curr1 - curr0) * levelBlend);
 
-		float prev0 = readWavetableLevelSample(wtMorphPrevMip, wtMorphPrevMipSize, level0, ph);
-		float prev1 = readWavetableLevelSample(wtMorphPrevMip, wtMorphPrevMipSize, level1, ph);
+		float prev0 = readWavetableLevelSample(prevState.mip, prevState.mipSize, level0, ph);
+		float prev1 = readWavetableLevelSample(prevState.mip, prevState.mipSize, level1, ph);
 		float prev = sanitizeWaveSample(prev0 + (prev1 - prev0) * levelBlend);
 
 		float blend = clamp(tableBlend.load(std::memory_order_relaxed), 0.f, 1.f);
@@ -664,44 +505,60 @@ struct SampleVCO : Module {
 		float sr = 0.f;
 		std::string err;
 		if (!loadWavMonoLimited5s(path, mono, sr, err)) {
-			std::lock_guard<std::mutex> lock(wtMutex);
-			sourceLoaded = false;
-			sourceMono.clear();
-			sourceSampleRate = 0.f;
-			sourcePath.clear();
-			sourceError = err;
-			pendingGenRequest.store(true, std::memory_order_relaxed);
+			std::shared_ptr<const std::vector<float>> empty;
+			std::atomic_store_explicit(&sourceMonoPending, empty, std::memory_order_release);
+			std::atomic_store_explicit(&sourceMonoUi, empty, std::memory_order_release);
+			sourceLoaded.store(false, std::memory_order_relaxed);
+			sourceSampleRate.store(0.f, std::memory_order_relaxed);
+			{
+				std::lock_guard<std::mutex> lock(sourceMetaMutex);
+				sourcePath.clear();
+				sourceError = err;
+			}
+			sourcePendingDirty.store(true, std::memory_order_relaxed);
 			return false;
 		}
 
-		std::lock_guard<std::mutex> lock(wtMutex);
-		sourceLoaded = true;
-		sourceMono = std::move(mono);
-		sourceSampleRate = sr;
-		sourcePath = path;
-		sourceError.clear();
-		pendingGenRequest.store(true, std::memory_order_relaxed);
+		auto monoPtr = std::make_shared<const std::vector<float>>(std::move(mono));
+		std::atomic_store_explicit(&sourceMonoPending, monoPtr, std::memory_order_release);
+		std::atomic_store_explicit(&sourceMonoUi, monoPtr, std::memory_order_release);
+		sourceLoaded.store(true, std::memory_order_relaxed);
+		sourceSampleRate.store(sr, std::memory_order_relaxed);
+		{
+			std::lock_guard<std::mutex> lock(sourceMetaMutex);
+			sourcePath = path;
+			sourceError.clear();
+		}
+		sourcePendingDirty.store(true, std::memory_order_relaxed);
 		return true;
 	}
 
 	void clearSourceWav() {
-		std::lock_guard<std::mutex> lock(wtMutex);
-		sourceLoaded = false;
-		sourceMono.clear();
-		sourceSampleRate = 0.f;
-		sourcePath.clear();
-		sourceError.clear();
-		pendingGenRequest.store(true, std::memory_order_relaxed);
+		std::shared_ptr<const std::vector<float>> empty;
+		std::atomic_store_explicit(&sourceMonoPending, empty, std::memory_order_release);
+		std::atomic_store_explicit(&sourceMonoUi, empty, std::memory_order_release);
+		sourceLoaded.store(false, std::memory_order_relaxed);
+		sourceSampleRate.store(0.f, std::memory_order_relaxed);
+		{
+			std::lock_guard<std::mutex> lock(sourceMetaMutex);
+			sourcePath.clear();
+			sourceError.clear();
+		}
+		sourcePendingDirty.store(true, std::memory_order_relaxed);
 	}
 
 	std::string getSourceStatusString() const {
-		std::lock_guard<std::mutex> lock(wtMutex);
-		if (sourceLoaded && sourceSampleRate > 1000.f) {
-			float sec = static_cast<float>(sourceMono.size()) / sourceSampleRate;
+		auto sourcePtr = std::atomic_load_explicit(&sourceMonoUi, std::memory_order_acquire);
+		float sr = sourceSampleRate.load(std::memory_order_relaxed);
+		if (sourcePtr && !sourcePtr->empty() && sr > 1000.f && sourceLoaded.load(std::memory_order_relaxed)) {
+			float sec = static_cast<float>(sourcePtr->size()) / sr;
 			return rack::string::f("WAV %.2fs", sec);
 		}
-		if (!sourceError.empty()) {
-			return std::string("WAV ERR: ") + sourceError;
+		{
+			std::lock_guard<std::mutex> lock(sourceMetaMutex);
+			if (!sourceError.empty()) {
+				return std::string("WAV ERR: ") + sourceError;
+			}
 		}
 		return "RANDOM SOURCE";
 	}
@@ -710,21 +567,22 @@ struct SampleVCO : Module {
 	                            int& outSize,
 	                            float& outWindowStartNorm,
 	                            float& outWindowSpanNorm) const {
-		std::lock_guard<std::mutex> lock(wtMutex);
+		auto sourcePtr = std::atomic_load_explicit(&sourceMonoUi, std::memory_order_acquire);
 		outWindowStartNorm = 0.f;
 		outWindowSpanNorm = 0.f;
-		if (!sourceLoaded || sourceMono.size() < 2) {
+		if (!sourcePtr || sourcePtr->size() < 2 || !sourceLoaded.load(std::memory_order_relaxed)) {
 			outSize = 0;
 			return;
 		}
 
 		const int displaySamples = 1024;
 		outSize = displaySamples;
-		const int srcSize = static_cast<int>(sourceMono.size());
-		int windowFrames = clamp(wtSize, 256, kGeneratedWavetableSize);
+		const int srcSize = static_cast<int>(sourcePtr->size());
+		int windowFrames = clamp(uiWtSize.load(std::memory_order_relaxed), 256, kGeneratedWavetableSize);
 		windowFrames = std::min(windowFrames, srcSize);
 		int maxStart = std::max(0, srcSize - windowFrames);
-		int start = static_cast<int>(std::lround(clamp(lastScanNorm, 0.f, 1.f) * static_cast<float>(maxStart)));
+		float scan = clamp(uiScanNorm.load(std::memory_order_relaxed), 0.f, 1.f);
+		int start = static_cast<int>(std::lround(scan * static_cast<float>(maxStart)));
 		start = clamp(start, 0, maxStart);
 		outWindowStartNorm = (srcSize > 1) ? (static_cast<float>(start) / static_cast<float>(srcSize - 1)) : 0.f;
 		outWindowSpanNorm = clamp(static_cast<float>(windowFrames) / static_cast<float>(srcSize), 0.f, 1.f);
@@ -735,8 +593,8 @@ struct SampleVCO : Module {
 			int i0 = static_cast<int>(std::floor(pos));
 			int i1 = std::min(i0 + 1, srcSize - 1);
 			float frac = pos - static_cast<float>(i0);
-			float s0 = sourceMono[i0];
-			float s1 = sourceMono[i1];
+			float s0 = (*sourcePtr)[i0];
+			float s1 = (*sourcePtr)[i1];
 			outData[i] = sanitizeWaveSample(s0 + (s1 - s0) * frac);
 		}
 	}
@@ -836,103 +694,62 @@ struct SampleVCO : Module {
 		return contourEnvelope;
 	}
 
-	// Legacy algorithm kept for reference and potential A/B tests.
-	// Summary: overscanned noise -> zero-cross search -> resample to table size -> normalize.
-	void generateNoiseWindowedWavetableLegacy(std::array<float, kMaxWavetableSize>& outTable, int size) {
-		const int overscan = 4;
-		const int noiseLen = std::max(size * overscan, size + 2);
-		std::uniform_real_distribution<float> dist(-1.f, 1.f);
-
-		std::vector<float> noise;
-		noise.reserve(noiseLen);
-		for (int i = 0; i < noiseLen; ++i) {
-			noise.push_back(dist(rng));
+	void rebuildMipmapsFromTable(
+		const std::array<float, kGeneratedWavetableSize>& source,
+		std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels>& mipOut,
+		std::array<int, kMipLevels>& mipSizesOut) {
+		const int baseSize = kGeneratedWavetableSize;
+		mipSizesOut[0] = baseSize;
+		for (int i = 0; i < baseSize; ++i) {
+			mipOut[0][i] = sanitizeWaveSample(source[i]);
 		}
+		mipOut[0][0] = 0.f;
+		mipOut[0][baseSize - 1] = 0.f;
 
-		std::vector<int> crossings;
-		crossings.reserve(noiseLen / 4);
-		for (int i = 0; i < noiseLen - 1; ++i) {
-			float a = noise[i];
-			float b = noise[i + 1];
-			if ((a <= 0.f && b > 0.f) || (a >= 0.f && b < 0.f)) {
-				crossings.push_back(i);
+		for (int level = 1; level < kMipLevels; ++level) {
+			int prevSize = mipSizesOut[level - 1];
+			int size = std::max(128, prevSize / 2);
+			mipSizesOut[level] = size;
+
+			for (int i = 0; i < size; ++i) {
+				int i0 = std::min(i * 2, prevSize - 1);
+				int i1 = std::min(i0 + 1, prevSize - 1);
+				float a = mipOut[level - 1][i0];
+				float b = mipOut[level - 1][i1];
+				mipOut[level][i] = sanitizeWaveSample(0.5f * (a + b));
 			}
-		}
 
-		int start = 0;
-		int end = std::min(noiseLen - 1, size);
-		if (crossings.size() >= 2) {
-			start = crossings.front();
-			int preferredLen = size;
-			int minLen = std::max(8, size / 2);
-			int bestEnd = -1;
-			int bestScore = std::numeric_limits<int>::max();
-			for (int c : crossings) {
-				int len = c - start;
-				if (len < minLen) {
-					continue;
-				}
-				int score = std::abs(len - preferredLen);
-				if (score < bestScore) {
-					bestScore = score;
-					bestEnd = c;
-				}
+			for (int i = size; i < kGeneratedWavetableSize; ++i) {
+				mipOut[level][i] = 0.f;
 			}
-			if (bestEnd > start + 1) {
-				end = bestEnd;
-			}
-		}
-
-		int segmentLen = std::max(2, end - start);
-		for (int i = 0; i < size; ++i) {
-			float pos = (static_cast<float>(i) / static_cast<float>(size - 1)) * static_cast<float>(segmentLen - 1);
-			int i0 = static_cast<int>(std::floor(pos));
-			int i1 = std::min(i0 + 1, segmentLen - 1);
-			float frac = pos - static_cast<float>(i0);
-			int n0 = clamp(start + i0, 0, noiseLen - 1);
-			int n1 = clamp(start + i1, 0, noiseLen - 1);
-			outTable[i] = noise[n0] + (noise[n1] - noise[n0]) * frac;
-		}
-
-		float peak = 1e-6f;
-		for (int i = 0; i < size; ++i) {
-			peak = std::max(peak, std::abs(outTable[i]));
-		}
-		float invPeak = 1.f / peak;
-		for (int i = 0; i < size; ++i) {
-			outTable[i] = sanitizeWaveSample(outTable[i] * invPeak);
+			mipOut[level][0] = 0.f;
+			mipOut[level][size - 1] = 0.f;
 		}
 	}
 
-	void regenerateNoiseSources() {
-		float scan = computeScanParam();
-		std::lock_guard<std::mutex> lock(wtMutex);
-		lastScanNorm = clamp(scan, 0.f, 1.f);
-	}
-
-	void regenerateWavePair(int dens, int smoth) {
+	void buildTableState(WavetableState& outState,
+	                     int wtSizeParam,
+	                     int dens,
+	                     int smoth,
+	                     float scanNorm,
+	                     const std::shared_ptr<const std::vector<float>>& sourcePtr) {
 		float smothF = clamp(smoth * 0.01f, 0.f, 1.f);
 		float densF = clamp(dens * 0.01f, 0.f, 1.f);
-		int windowFrames = computeWavetableSize();
-		windowFrames = clamp(windowFrames, 256, kGeneratedWavetableSize);
-		bool sourceReady = false;
+		int windowFrames = clamp(wtSizeParam, 256, kGeneratedWavetableSize);
+		bool sourceReady = (sourcePtr && sourcePtr->size() > 2);
 		std::array<float, kGeneratedWavetableSize> localWindow {};
-		{
-			std::lock_guard<std::mutex> lock(wtMutex);
-			sourceReady = sourceLoaded && sourceMono.size() > 2;
-			if (sourceReady) {
-				int srcSize = static_cast<int>(sourceMono.size());
-				windowFrames = std::min(windowFrames, srcSize);
-				int maxStart = std::max(0, srcSize - windowFrames);
-				float scanNorm = clamp(lastScanNorm, 0.f, 1.f);
-				int start = static_cast<int>(std::lround(scanNorm * static_cast<float>(maxStart)));
-				start = clamp(start, 0, maxStart);
-				for (int i = 0; i < windowFrames; ++i) {
-					localWindow[i] = sanitizeWaveSample(sourceMono[start + i]);
-				}
+
+		if (sourceReady) {
+			int srcSize = static_cast<int>(sourcePtr->size());
+			windowFrames = std::min(windowFrames, srcSize);
+			int maxStart = std::max(0, srcSize - windowFrames);
+			int start = static_cast<int>(std::lround(clamp(scanNorm, 0.f, 1.f) * static_cast<float>(maxStart)));
+			start = clamp(start, 0, maxStart);
+			for (int i = 0; i < windowFrames; ++i) {
+				localWindow[i] = sanitizeWaveSample((*sourcePtr)[start + i]);
 			}
 		}
-		if (!sourceReady) {
+		else {
 			std::uniform_real_distribution<float> dist(-1.f, 1.f);
 			for (int i = 0; i < windowFrames; ++i) {
 				localWindow[i] = dist(rng);
@@ -976,7 +793,6 @@ struct SampleVCO : Module {
 		}
 		localWindow = simplified;
 
-		std::lock_guard<std::mutex> lock(wtMutex);
 		const float outDen = static_cast<float>(kGeneratedWavetableSize - 1);
 		const float srcDen = static_cast<float>(windowFrames - 1);
 		for (int i = 0; i < kGeneratedWavetableSize; ++i) {
@@ -986,126 +802,132 @@ struct SampleVCO : Module {
 			float frac = pos - static_cast<float>(i0);
 			float s0 = localWindow[i0];
 			float s1 = localWindow[i1];
-			wtA[i] = sanitizeWaveSample(s0 + (s1 - s0) * frac);
+			outState.wave[i] = sanitizeWaveSample(s0 + (s1 - s0) * frac);
 		}
 
-		for (int i = 0; i < kGeneratedWavetableSize; ++i) {
-			wtB[i] = wtA[i];
-		}
-		wtA[0] = 0.f;
-		wtA[kGeneratedWavetableSize - 1] = 0.f;
-		wtB[0] = 0.f;
-		wtB[kGeneratedWavetableSize - 1] = 0.f;
-		lastSmoth = smoth;
-		lastDense = dens;
-		wtSize = windowFrames;
-	}
-
-	void rebuildMorphBaseTable(float morph) {
-		int sizeLocal = kGeneratedWavetableSize;
-		std::lock_guard<std::mutex> lock(wtMutex);
-		for (int i = 0; i < sizeLocal; ++i) {
-			wtMorphBase[i] = sanitizeWaveSample(wtA[i] + (wtB[i] - wtA[i]) * morph);
-		}
-		lastMorph = morph;
-	}
-
-	void rebuildMipmapsFromTable(
-		const std::array<float, kMaxWavetableSize>& source,
-		std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels>& mipOut,
-		std::array<int, kMipLevels>& mipSizesOut) {
-		const int baseSize = kGeneratedWavetableSize;
-		mipSizesOut[0] = baseSize;
-		for (int i = 0; i < baseSize; ++i) {
-			mipOut[0][i] = sanitizeWaveSample(source[i]);
-		}
-		mipOut[0][0] = 0.f;
-		mipOut[0][baseSize - 1] = 0.f;
-
-		for (int level = 1; level < kMipLevels; ++level) {
-			int prevSize = mipSizesOut[level - 1];
-			int size = std::max(128, prevSize / 2);
-			mipSizesOut[level] = size;
-
-			for (int i = 0; i < size; ++i) {
-				int i0 = std::min(i * 2, prevSize - 1);
-				int i1 = std::min(i0 + 1, prevSize - 1);
-				float a = mipOut[level - 1][i0];
-				float b = mipOut[level - 1][i1];
-				mipOut[level][i] = sanitizeWaveSample(0.5f * (a + b));
-			}
-
-			for (int i = size; i < kGeneratedWavetableSize; ++i) {
-				mipOut[level][i] = 0.f;
-			}
-			mipOut[level][0] = 0.f;
-			mipOut[level][size - 1] = 0.f;
-		}
-	}
-
-	void rebuildPlaybackTable(int windowSize) {
-		const int outSize = kGeneratedWavetableSize;
-		const float pi = 3.14159265359f;
-		const int localWtSize = clamp(windowSize, 256, kGeneratedWavetableSize);
-
-		std::lock_guard<std::mutex> lock(wtMutex);
-		for (int i = 0; i < outSize; ++i) {
-			wtMorph[i] = sanitizeWaveSample(wtMorphBase[i]);
-		}
-
-		// Apply symmetric cosine edge window so start/end stay stable at WT SIZE changes.
+		// Keep seamless table boundaries stable.
 		const int edgeSamples = 64;
-		const int edge = std::min(edgeSamples, outSize / 2);
+		const int edge = std::min(edgeSamples, kGeneratedWavetableSize / 2);
 		for (int i = 0; i < edge; ++i) {
-				float t = static_cast<float>(i) / static_cast<float>(std::max(1, edge - 1));
-				float w = 0.5f - 0.5f * std::cos(pi * t);
-				wtMorph[i] = sanitizeWaveSample(wtMorph[i] * w);
-				wtMorph[outSize - 1 - i] = sanitizeWaveSample(wtMorph[outSize - 1 - i] * w);
-			}
+			float t = static_cast<float>(i) / static_cast<float>(std::max(1, edge - 1));
+			float w = 0.5f - 0.5f * std::cos(pi * t);
+			outState.wave[i] = sanitizeWaveSample(outState.wave[i] * w);
+			outState.wave[kGeneratedWavetableSize - 1 - i] = sanitizeWaveSample(outState.wave[kGeneratedWavetableSize - 1 - i] * w);
+		}
+		outState.wave[0] = 0.f;
+		outState.wave[kGeneratedWavetableSize - 1] = 0.f;
+		outState.wtSize = windowFrames;
+		outState.scanNorm = clamp(scanNorm, 0.f, 1.f);
+		rebuildMipmapsFromTable(outState.wave, outState.mip, outState.mipSize);
+	}
 
-		wtMorph[0] = 0.f;
-		wtMorph[outSize - 1] = 0.f;
-		wtSize = localWtSize;
-		rebuildMipmapsFromTable(wtMorph, wtMorphMip, wtMorphMipSize);
+	int acquireBuildSlot() const {
+		int active = activeStateIndex.load(std::memory_order_acquire);
+		int prev = prevStateIndex.load(std::memory_order_acquire);
+		int ready = readyStateIndex.load(std::memory_order_acquire);
+		for (int i = 0; i < static_cast<int>(wavetableStates.size()); ++i) {
+			if (i != active && i != prev && i != ready) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	void submitBuildRequest(int wtSize, int dens, int smoth, float scanNorm) {
+		buildReqWtSize.store(clamp(wtSize, 256, kGeneratedWavetableSize), std::memory_order_relaxed);
+		buildReqDense.store(clamp(dens, 0, 100), std::memory_order_relaxed);
+		buildReqSmoth.store(clamp(smoth, 0, 100), std::memory_order_relaxed);
+		buildReqScanNorm.store(clamp(scanNorm, 0.f, 1.f), std::memory_order_relaxed);
+		buildReqRevision.fetch_add(1, std::memory_order_release);
+	}
+
+	void startWorkerThread() {
+		workerRunning.store(true, std::memory_order_release);
+		workerThread = std::thread([this]() {
+			uint64_t seenRevision = buildReqRevision.load(std::memory_order_acquire);
+			while (workerRunning.load(std::memory_order_acquire)) {
+				uint64_t revision = buildReqRevision.load(std::memory_order_acquire);
+				if (revision == seenRevision) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					continue;
+				}
+
+				int slot = acquireBuildSlot();
+				if (slot < 0) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					continue;
+				}
+
+				int wtSize = buildReqWtSize.load(std::memory_order_relaxed);
+				int dens = buildReqDense.load(std::memory_order_relaxed);
+				int smoth = buildReqSmoth.load(std::memory_order_relaxed);
+				float scanNorm = buildReqScanNorm.load(std::memory_order_relaxed);
+				auto sourcePtr = std::atomic_load_explicit(&sourceMonoActive, std::memory_order_acquire);
+				buildTableState(wavetableStates[slot], wtSize, dens, smoth, scanNorm, sourcePtr);
+
+				uint64_t revisionAfterBuild = buildReqRevision.load(std::memory_order_acquire);
+				if (revisionAfterBuild != revision) {
+					seenRevision = revision;
+					continue;
+				}
+
+				readyStateIndex.store(slot, std::memory_order_release);
+				seenRevision = revision;
+			}
+		});
+	}
+
+	void stopWorkerThread() {
+		workerRunning.store(false, std::memory_order_release);
+		if (workerThread.joinable()) {
+			workerThread.join();
+		}
+	}
+
+	void publishUiDisplayWave() {
+		int next = 1 - uiDisplayWaveIndex.load(std::memory_order_relaxed);
+		float blend = clamp(tableBlend.load(std::memory_order_relaxed), 0.f, 1.f);
+		int activeIdx = activeStateIndex.load(std::memory_order_acquire);
+		int prevIdx = prevStateIndex.load(std::memory_order_acquire);
+		const WavetableState& active = wavetableStates[activeIdx];
+		const WavetableState& prev = wavetableStates[prevIdx];
+		for (int i = 0; i < kGeneratedWavetableSize; ++i) {
+			float prevSample = prev.wave[i];
+			float currSample = active.wave[i];
+			uiDisplayWave[next][i] = sanitizeWaveSample(prevSample + (currSample - prevSample) * blend);
+		}
+		uiDisplayWaveIndex.store(next, std::memory_order_release);
+		uiScanNorm.store(active.scanNorm, std::memory_order_relaxed);
+		uiWtSize.store(active.wtSize, std::memory_order_relaxed);
 	}
 
 	void copyDisplayData(std::array<float, kMaxWavetableSize>& outData, int& outSize, float& outScan) const {
-		std::lock_guard<std::mutex> lock(wtMutex);
+		int idx = uiDisplayWaveIndex.load(std::memory_order_acquire);
 		outSize = kGeneratedWavetableSize;
-		float blend = clamp(tableBlend.load(std::memory_order_relaxed), 0.f, 1.f);
 		for (int i = 0; i < outSize; ++i) {
-			float prev = wtMorphPrev[i];
-			float curr = wtMorph[i];
-			outData[i] = sanitizeWaveSample(prev + (curr - prev) * blend);
+			outData[i] = uiDisplayWave[idx][i];
 		}
-		outScan = lastScanNorm;
+		outScan = uiScanNorm.load(std::memory_order_relaxed);
 	}
 
-	void captureAudibleMorphTable(std::array<float, kMaxWavetableSize>& outData) {
-		const int outSize = kGeneratedWavetableSize;
-		float blend = clamp(tableBlend.load(std::memory_order_relaxed), 0.f, 1.f);
-		for (int i = 0; i < outSize; ++i) {
-			float prev = wtMorphPrev[i];
-			float curr = wtMorph[i];
-			outData[i] = sanitizeWaveSample(prev + (curr - prev) * blend);
-		}
-		outData[0] = 0.f;
-		outData[outSize - 1] = 0.f;
+	int getPublishedWtSize() const {
+		return uiWtSize.load(std::memory_order_relaxed);
 	}
 
 	void onReset() override {
 		for (float& p : phase) {
 			p = 0.f;
 		}
-		regenerateNoiseSources();
-		regenerateWavePair(computeDenseParam(), computeSmothParam());
-		rebuildMorphBaseTable(0.f);
-		rebuildPlaybackTable(computeWavetableSize());
-		wtMorphPrev = wtMorph;
-		wtMorphPrevMip = wtMorphMip;
-		wtMorphPrevMipSize = wtMorphMipSize;
+		int active = activeStateIndex.load(std::memory_order_acquire);
+		prevStateIndex.store(active, std::memory_order_release);
+		readyStateIndex.store(-1, std::memory_order_release);
 		tableBlend.store(1.f, std::memory_order_relaxed);
-		pendingGenRequest.store(false, std::memory_order_relaxed);
+		requestedWtSize = -1;
+		requestedDense = -1;
+		requestedSmoth = -1;
+		requestedScanNorm = -1.f;
+		submitBuildRequest(computeWavetableSize(), computeDenseParam(), computeSmothParam(), clamp(computeScanParam(), 0.f, 1.f));
+		publishUiDisplayWave();
 		controlUpdateTimer = 0.f;
 		contourEnvelope = 1.f;
 		float sr = previousSampleRate > 1.f ? previousSampleRate : 48000.f;
@@ -1117,8 +939,8 @@ struct SampleVCO : Module {
 	json_t* dataToJson() override {
 		json_t* rootJ = json_object();
 		{
-			std::lock_guard<std::mutex> lock(wtMutex);
-			if (sourceLoaded && !sourcePath.empty()) {
+			std::lock_guard<std::mutex> lock(sourceMetaMutex);
+			if (!sourcePath.empty()) {
 				json_object_set_new(rootJ, "sourcePath", json_string(sourcePath.c_str()));
 			}
 		}
@@ -1133,26 +955,49 @@ struct SampleVCO : Module {
 	}
 
 	void updateTablesIfNeeded() {
+		bool sourceChanged = false;
+		if (sourcePendingDirty.exchange(false, std::memory_order_relaxed)) {
+			auto pending = std::atomic_load_explicit(&sourceMonoPending, std::memory_order_acquire);
+			std::atomic_store_explicit(&sourceMonoActive, pending, std::memory_order_release);
+			sourceChanged = true;
+		}
+
 		int targetSize = computeWavetableSize();
 		int targetDense = computeDenseParam();
 		int targetSmoth = computeSmothParam();
-		float targetScan = computeScanParam();
+		float targetScan = clamp(computeScanParam(), 0.f, 1.f);
 
-		bool needSeed = pendingGenRequest.exchange(false, std::memory_order_relaxed);
-		bool sizeChanged = targetSize != wtSize;
-		bool scanChanged = std::abs(targetScan - lastScanNorm) > 1e-4f;
-		bool waveShapeChanged = needSeed || sizeChanged || (targetDense != lastDense) || (targetSmoth != lastSmoth) || scanChanged;
+		bool targetChanged = sourceChanged ||
+		                     (targetSize != requestedWtSize) ||
+		                     (targetDense != requestedDense) ||
+		                     (targetSmoth != requestedSmoth) ||
+		                     (std::abs(targetScan - requestedScanNorm) > 1e-4f);
+		if (targetChanged) {
+			requestedWtSize = targetSize;
+			requestedDense = targetDense;
+			requestedSmoth = targetSmoth;
+			requestedScanNorm = targetScan;
+			submitBuildRequest(targetSize, targetDense, targetSmoth, targetScan);
+		}
 
-		if (sizeChanged || waveShapeChanged) {
-			captureAudibleMorphTable(wtMorphPrev);
-			rebuildMipmapsFromTable(wtMorphPrev, wtMorphPrevMip, wtMorphPrevMipSize);
-			if (waveShapeChanged) {
-				regenerateNoiseSources();
-				regenerateWavePair(targetDense, targetSmoth);
+		int ready = readyStateIndex.exchange(-1, std::memory_order_acq_rel);
+		if (ready >= 0) {
+			int active = activeStateIndex.load(std::memory_order_acquire);
+			if (ready != active) {
+				prevStateIndex.store(active, std::memory_order_release);
+				activeStateIndex.store(ready, std::memory_order_release);
+				tableBlend.store(0.f, std::memory_order_relaxed);
 			}
-			rebuildMorphBaseTable(0.f);
-			rebuildPlaybackTable(targetSize);
-			tableBlend.store(0.f, std::memory_order_relaxed);
+			publishUiDisplayWave();
+		}
+
+		float blend = tableBlend.load(std::memory_order_relaxed);
+		if (blend >= 0.999f) {
+			int active = activeStateIndex.load(std::memory_order_acquire);
+			prevStateIndex.store(active, std::memory_order_release);
+		}
+		if (blend < 0.999f) {
+			publishUiDisplayWave();
 		}
 	}
 
@@ -1300,43 +1145,6 @@ struct PanelLabel : TransparentWidget {
 	}
 };
 
-struct PanelGridOverlay : TransparentWidget {
-	float xStartMm = 10.f;
-	float xStepMm = 14.f;
-	float yStartMm = 15.f;
-	float yStepMm = 16.f;
-
-	void draw(const DrawArgs& args) override {
-		float xStartPx = mm2px(Vec(xStartMm, 0.f)).x;
-		float xStepPx = mm2px(Vec(xStepMm, 0.f)).x;
-		float yStartPx = mm2px(Vec(0.f, yStartMm)).y;
-		float yStepPx = mm2px(Vec(0.f, yStepMm)).y;
-
-		nvgBeginPath(args.vg);
-		for (float x = xStartPx; x <= box.size.x; x += xStepPx) {
-			nvgMoveTo(args.vg, x, 0.f);
-			nvgLineTo(args.vg, x, box.size.y);
-		}
-		for (float y = yStartPx; y <= box.size.y; y += yStepPx) {
-			nvgMoveTo(args.vg, 0.f, y);
-			nvgLineTo(args.vg, box.size.x, y);
-		}
-		nvgStrokeWidth(args.vg, 0.8f);
-		nvgStrokeColor(args.vg, nvgRGBA(15, 23, 42, 45));
-		nvgStroke(args.vg);
-
-		// Highlight raster origin.
-		nvgBeginPath(args.vg);
-		nvgMoveTo(args.vg, xStartPx, 0.f);
-		nvgLineTo(args.vg, xStartPx, box.size.y);
-		nvgMoveTo(args.vg, 0.f, yStartPx);
-		nvgLineTo(args.vg, box.size.x, yStartPx);
-		nvgStrokeWidth(args.vg, 1.0f);
-		nvgStrokeColor(args.vg, nvgRGBA(15, 23, 42, 85));
-		nvgStroke(args.vg);
-	}
-};
-
 struct SourceOverviewDisplay : TransparentWidget {
 	SampleVCO* moduleRef = nullptr;
 
@@ -1452,7 +1260,7 @@ struct WavetableDisplay : TransparentWidget {
 			nvgFontSize(args.vg, 9.f);
 			nvgFillColor(args.vg, nvgRGB(0x1f, 0x29, 0x37));
 			nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
-			std::string info = rack::string::f("WT %d  SC %.2f  %s", moduleRef->wtSize, scanNorm,
+			std::string info = rack::string::f("WT %d  SC %.2f  %s", moduleRef->getPublishedWtSize(), scanNorm,
 			                                   moduleRef->getSourceStatusString().c_str());
 			nvgText(args.vg, 5.f, 4.f, info.c_str(), nullptr);
 		}
