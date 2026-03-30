@@ -63,7 +63,7 @@ void WavetableEngine::setSource(const std::shared_ptr<const std::vector<float>>&
 }
 
 void WavetableEngine::setTargets(int wtSize, float scanNorm) {
-	int wt = clamp(wtSize, 256, kGeneratedWavetableSize);
+	int wt = clamp(wtSize, kMinWtSize, kGeneratedWavetableSize);
 	float sc = clamp(scanNorm, 0.f, 1.f);
 	auto srcPtr = std::atomic_load_explicit(&sourceMonoActive, std::memory_order_acquire);
 	bool sourceReady = (srcPtr && srcPtr->size() > 2);
@@ -259,7 +259,7 @@ void WavetableEngine::buildSnapshot(BankSnapshot& out,
                                     float scanNorm,
                                     const std::shared_ptr<const std::vector<float>>& sourcePtr,
                                     uint64_t sourceRev) {
-	int windowFrames = clamp(wtSize, 256, kGeneratedWavetableSize);
+	int windowFrames = clamp(wtSize, kMinWtSize, kGeneratedWavetableSize);
 	bool sourceReady = (sourcePtr && sourcePtr->size() > 2);
 	int srcSize = sourceReady ? static_cast<int>(sourcePtr->size()) : 0;
 	if (sourceReady) {
@@ -349,7 +349,7 @@ void WavetableEngine::buildSnapshot(BankSnapshot& out,
 }
 
 void WavetableEngine::submitBuildRequest(int wtSize, float scanNorm, uint64_t sourceRev) {
-	buildReqWtSize.store(clamp(wtSize, 256, kGeneratedWavetableSize), std::memory_order_relaxed);
+	buildReqWtSize.store(clamp(wtSize, kMinWtSize, kGeneratedWavetableSize), std::memory_order_relaxed);
 	buildReqScanNorm.store(clamp(scanNorm, 0.f, 1.f), std::memory_order_relaxed);
 	buildReqSourceRevision.store(sourceRev, std::memory_order_relaxed);
 	buildReqRevision.fetch_add(1, std::memory_order_release);

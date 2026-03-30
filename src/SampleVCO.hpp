@@ -15,7 +15,7 @@ struct SampleVCO : Module {
 	static constexpr int kMaxWavetableSize = WavetableEngine::kMaxWavetableSize;
 	static constexpr int kGeneratedWavetableSize = WavetableEngine::kGeneratedWavetableSize;
 	static constexpr int kMorphWaveCount = WavetableEngine::kMorphWaveCount;
-	static constexpr int kBuildNumber = 100;
+	static constexpr int kBuildNumber = 101;
 	static constexpr float kTableTransitionTimeSec = 0.02f;
 	static constexpr float kControlUpdateIntervalSec = 0.01f;
 	static constexpr int kMaxVoices = 10;

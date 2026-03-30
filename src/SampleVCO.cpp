@@ -63,7 +63,11 @@ SampleVCO::SampleVCO() {
 	auto* octaveQ = configParam(OCTAVE_PARAM, -3.f, 3.f, 0.f, "Octave shift", " oct");
 	octaveQ->snapEnabled = true;
 	configParam(SCAN_PARAM, 0.f, 1.f, 0.f, "Scan");
-	auto* wtSizeQ = configParam(WT_SIZE_PARAM, 256.f, 512.f, 512.f, "WT size");
+	auto* wtSizeQ = configParam(WT_SIZE_PARAM,
+	                            static_cast<float>(WavetableEngine::kMinWtSize),
+	                            512.f,
+	                            512.f,
+	                            "WT size");
 	wtSizeQ->snapEnabled = true;
 	configParam(MORPH_PARAM, 0.f, 1.f, 0.f, "Morph");
 	configParam(ENV_PARAM, 0.f, 1.f, 1.f, "Envelope");
@@ -112,8 +116,10 @@ float SampleVCO::computeMorphParam() {
 
 int SampleVCO::computeWavetableSize() {
 	float v = getModulatedKnobValue(params[WT_SIZE_PARAM].getValue(), WT_SIZE_CV_INPUT,
-	                                WT_SIZE_CV_DEPTH_PARAM, 256.f, 512.f);
-	return clamp(static_cast<int>(std::round(v)), 256, 512);
+	                                WT_SIZE_CV_DEPTH_PARAM,
+	                                static_cast<float>(WavetableEngine::kMinWtSize),
+	                                512.f);
+	return clamp(static_cast<int>(std::round(v)), WavetableEngine::kMinWtSize, 512);
 }
 
 float SampleVCO::computeEnvParam() {

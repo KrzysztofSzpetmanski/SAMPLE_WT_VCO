@@ -13,6 +13,7 @@ class WavetableEngine {
 public:
 	static constexpr int kMaxWavetableSize = 4096;
 	static constexpr int kGeneratedWavetableSize = 512;
+	static constexpr int kMinWtSize = 64;
 	static constexpr int kMorphWaveCount = 20;
 	static constexpr int kMipLevels = 5;
 
