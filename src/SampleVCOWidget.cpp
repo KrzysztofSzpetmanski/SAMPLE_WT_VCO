@@ -114,20 +114,79 @@ struct WavetableDisplay : TransparentWidget {
 		if (!moduleRef) {
 			return;
 		}
-
-		std::array<float, SampleVCO::kMaxWavetableSize> wt {};
-		int size = 0;
-		float scanNorm = 0.f;
-		moduleRef->copyDisplayData(wt, size, scanNorm);
-		if (size < 2) {
+		auto font = APP->window->loadFont(asset::system("res/fonts/DejaVuSans.ttf"));
+		if (!moduleRef->hasLoadedSource()) {
+			if (font) {
+				nvgFontFaceId(args.vg, font->handle);
+				nvgFontSize(args.vg, 10.f);
+				nvgFillColor(args.vg, nvgRGB(0x1f, 0x29, 0x37));
+				nvgTextAlign(args.vg, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+				nvgText(args.vg, box.size.x * 0.5f, box.size.y * 0.5f, "NO FILE LOADED", nullptr);
+			}
 			return;
 		}
 
+		std::array<std::array<float, SampleVCO::kGeneratedWavetableSize>, SampleVCO::kMorphWaveCount> waves {};
+		int waveCount = 0;
+		int waveSize = 0;
+		float scanNorm = 0.f;
+		float morphNorm = 0.f;
+		moduleRef->copyDisplayWaves(waves, waveCount, waveSize, scanNorm, morphNorm);
+		if (waveCount < 1 || waveSize < 2) {
+			return;
+		}
+
+		const float pad = 4.f;
+		const float drawW = box.size.x - 2.f * pad;
+		const float drawH = box.size.y - 2.f * pad;
+		const float skewPct = 0.35f;
+		const float depthPct = 0.62f;
+		const float hCompress = 0.60f;
+
+		const int step = 2;
+		for (int w = waveCount - 1; w >= 0; w -= step) {
+			float tWave = (waveCount <= 1) ? 0.f :
+				static_cast<float>(w) / static_cast<float>(waveCount - 1);
+			float x0 = pad + tWave * skewPct * drawW;
+			float y0 = pad + (1.f - tWave) * depthPct * drawH;
+			float lw = drawW * (1.f - skewPct);
+			float hw = drawH * depthPct * hCompress;
+
+			nvgBeginPath(args.vg);
+			for (int i = 0; i < waveSize; ++i) {
+				float t = static_cast<float>(i) / static_cast<float>(waveSize - 1);
+				float x = x0 + t * lw;
+				float y = y0 + (-waves[w][i] + 1.f) * 0.5f * hw;
+				if (i == 0) {
+					nvgMoveTo(args.vg, x, y);
+				}
+				else {
+					nvgLineTo(args.vg, x, y);
+				}
+			}
+			NVGcolor c = nvgRGB(0x0f, 0x76, 0xbc);
+			c.a = 0.20f + 0.45f * (1.f - tWave);
+			nvgStrokeWidth(args.vg, 1.0f);
+			nvgStrokeColor(args.vg, c);
+			nvgStroke(args.vg);
+		}
+
+		float selPos = clamp(morphNorm, 0.f, 1.f) * static_cast<float>(std::max(waveCount - 1, 0));
+		int w0 = clamp(static_cast<int>(std::floor(selPos)), 0, std::max(waveCount - 1, 0));
+		int w1 = std::min(w0 + 1, std::max(waveCount - 1, 0));
+		float wf = selPos - static_cast<float>(w0);
+		float tSel = (waveCount <= 1) ? 0.f : selPos / static_cast<float>(waveCount - 1);
+		float sx0 = pad + tSel * skewPct * drawW;
+		float sy0 = pad + (1.f - tSel) * depthPct * drawH;
+		float slw = drawW * (1.f - skewPct);
+		float shw = drawH * depthPct * hCompress;
+
 		nvgBeginPath(args.vg);
-		for (int i = 0; i < size; ++i) {
-			float t = static_cast<float>(i) / static_cast<float>(size - 1);
-			float x = t * (box.size.x - 8.f) + 4.f;
-			float y = (0.5f - 0.42f * wt[i]) * (box.size.y - 10.f) + 5.f;
+		for (int i = 0; i < waveSize; ++i) {
+			float t = static_cast<float>(i) / static_cast<float>(waveSize - 1);
+			float x = sx0 + t * slw;
+			float yWave = waves[w0][i] + (waves[w1][i] - waves[w0][i]) * wf;
+			float y = sy0 + (-yWave + 1.f) * 0.5f * shw;
 			if (i == 0) {
 				nvgMoveTo(args.vg, x, y);
 			}
@@ -135,22 +194,29 @@ struct WavetableDisplay : TransparentWidget {
 				nvgLineTo(args.vg, x, y);
 			}
 		}
-		nvgStrokeWidth(args.vg, 1.4f);
-		nvgStrokeColor(args.vg, nvgRGB(0x0f, 0x76, 0xbc));
+		nvgStrokeWidth(args.vg, 2.0f);
+		nvgStrokeColor(args.vg, nvgRGB(0xef, 0x44, 0x44));
 		nvgStroke(args.vg);
 
-		auto font = APP->window->loadFont(asset::system("res/fonts/DejaVuSans.ttf"));
 		if (font) {
 			nvgFontFaceId(args.vg, font->handle);
 			nvgFontSize(args.vg, 9.f);
 			nvgFillColor(args.vg, nvgRGB(0x1f, 0x29, 0x37));
 			nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
-			std::string info = rack::string::f("WT %d  SC %.2f  %s  %s",
+			std::string info = rack::string::f("WT %d  SC %.2f  MR %.2f",
 			                                   moduleRef->getPublishedWtSize(),
 			                                   scanNorm,
-			                                   moduleRef->getWorkModeLabel(),
-			                                   moduleRef->getSourceStatusString().c_str());
+			                                   morphNorm);
 			nvgText(args.vg, 5.f, 4.f, info.c_str(), nullptr);
+
+			std::string fileName = moduleRef->getSourceStatusString();
+			const size_t maxChars = 27;
+			if (fileName.size() > maxChars) {
+				fileName = fileName.substr(0, maxChars - 3) + "...";
+			}
+			nvgFontSize(args.vg, 8.f);
+			nvgTextAlign(args.vg, NVG_ALIGN_CENTER | NVG_ALIGN_BOTTOM);
+			nvgText(args.vg, box.size.x * 0.5f, box.size.y - 2.f, fileName.c_str(), nullptr);
 		}
 	}
 };
@@ -280,38 +346,25 @@ struct SampleVCOWidget : ModuleWidget {
 		addChild(sourceDisplay);
 
 		auto* wtDisplay = createWidget<WavetableDisplay>(mm2px(Vec(3.5f, 20.5f)));
-		wtDisplay->box.size = mm2px(Vec(41.5f, 18.0f));
+		wtDisplay->box.size = mm2px(Vec(41.5f, 22.0f));
 		wtDisplay->moduleRef = module;
 		addChild(wtDisplay);
 
-		auto* scanKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 16.0f)), module, SampleVCO::MORPH_PARAM);
-		scanKnob->moduleRef = module;
-		scanKnob->depthParam = SampleVCO::MORPH_CV_DEPTH_PARAM;
-		scanKnob->cvInput = SampleVCO::MORPH_CV_INPUT;
-		scanKnob->depthMenuLabel = "SCAN CV depth";
-		addParam(scanKnob);
-		addParam(createParamCentered<TL1105>(mm2px(Vec(52.0f, 30.0f)), module, SampleVCO::MODE_PUSH_PARAM));
+		auto* morphKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 31.5f)), module, SampleVCO::MORPH_PARAM);
+		morphKnob->moduleRef = module;
+		morphKnob->depthParam = SampleVCO::MORPH_CV_DEPTH_PARAM;
+		morphKnob->cvInput = SampleVCO::MORPH_CV_INPUT;
+		morphKnob->depthMenuLabel = "MORPH CV depth";
+		addParam(morphKnob);
 
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 53.0f)), module, SampleVCO::PITCH_PARAM));
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 53.0f)), module, SampleVCO::DETUNE_PARAM));
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 53.0f)), module, SampleVCO::UNISON_PARAM));
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 53.0f)), module, SampleVCO::OCTAVE_PARAM));
 
-		auto* densKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(24.0f, 69.0f)), module, SampleVCO::DENS_PARAM);
-		densKnob->moduleRef = module;
-		densKnob->depthParam = SampleVCO::DENS_CV_DEPTH_PARAM;
-		densKnob->cvInput = SampleVCO::DENS_CV_INPUT;
-		densKnob->depthMenuLabel = "DENS CV depth";
-		addParam(densKnob);
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 69.0f)), module, SampleVCO::SCAN_PARAM));
 
-		auto* smothKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(38.0f, 69.0f)), module, SampleVCO::SMOTH_PARAM);
-		smothKnob->moduleRef = module;
-		smothKnob->depthParam = SampleVCO::SMOTH_CV_DEPTH_PARAM;
-		smothKnob->cvInput = SampleVCO::SMOTH_CV_INPUT;
-		smothKnob->depthMenuLabel = "SMOTH CV depth";
-		addParam(smothKnob);
-
-		auto* sizeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 69.0f)), module, SampleVCO::WT_SIZE_PARAM);
+		auto* sizeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(24.0f, 69.0f)), module, SampleVCO::WT_SIZE_PARAM);
 		sizeKnob->moduleRef = module;
 		sizeKnob->depthParam = SampleVCO::WT_SIZE_CV_DEPTH_PARAM;
 		sizeKnob->cvInput = SampleVCO::WT_SIZE_CV_INPUT;
@@ -323,17 +376,15 @@ struct SampleVCOWidget : ModuleWidget {
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 85.0f)), module, SampleVCO::RVB_FB_PARAM));
 		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 85.0f)), module, SampleVCO::RVB_MIX_PARAM));
 
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 101.0f)), module, SampleVCO::MORPH_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 101.0f)), module, SampleVCO::DENS_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(38.0f, 101.0f)), module, SampleVCO::SMOTH_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(52.0f, 101.0f)), module, SampleVCO::WT_SIZE_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 101.0f)), module, SampleVCO::WT_SIZE_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 101.0f)), module, SampleVCO::MORPH_CV_INPUT));
 
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 117.0f)), module, SampleVCO::VOCT_INPUT));
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 117.0f)), module, SampleVCO::TRIG_INPUT));
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(38.0f, 117.0f)), module, SampleVCO::LEFT_OUTPUT));
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(52.0f, 117.0f)), module, SampleVCO::RIGHT_OUTPUT));
 
-		auto addPanelLabel = [this](float xMm, float yMm, const char* txt, int size = 8, NVGcolor color = nvgRGB(0x0f, 0x17, 0x2a)) {
+		auto addPanelLabel = [this](float xMm, float yMm, const std::string& txt, int size = 8, NVGcolor color = nvgRGB(0x0f, 0x17, 0x2a)) {
 			auto* l = createWidget<PanelLabel>(mm2px(Vec(xMm, yMm)));
 			l->text = txt;
 			l->fontSize = size;
@@ -342,27 +393,24 @@ struct SampleVCOWidget : ModuleWidget {
 		};
 
 		addPanelLabel(30.5f, 8.0f, "SAMPLE VCO", 10, nvgRGB(0x0b, 0x12, 0x20));
-		addPanelLabel(52.0f, 10.0f, "SCAN", 8);
-		addPanelLabel(52.0f, 24.0f, "MODE", 8);
+		addPanelLabel(52.0f, 10.0f, rack::string::f("BUILD %d", SampleVCO::kBuildNumber), 7);
+		addPanelLabel(52.0f, 24.0f, "MORPH", 8);
 
 		addPanelLabel(10.0f, 47.0f, "PITCH", 7, nvgRGB(0x1f, 0x29, 0x37));
 		addPanelLabel(24.0f, 47.0f, "DETUNE", 7, nvgRGB(0x1f, 0x29, 0x37));
 		addPanelLabel(38.0f, 47.0f, "UNISON", 7, nvgRGB(0x1f, 0x29, 0x37));
 		addPanelLabel(52.0f, 47.0f, "OCT", 7, nvgRGB(0x1f, 0x29, 0x37));
 
-		addPanelLabel(24.0f, 63.0f, "DENS", 8);
-		addPanelLabel(38.0f, 63.0f, "SMOTH", 8);
-		addPanelLabel(52.0f, 63.0f, "WTSIZE", 8);
-
+		addPanelLabel(10.0f, 63.0f, "SCAN", 8);
+		addPanelLabel(24.0f, 63.0f, "WTSIZE", 8);
 		addPanelLabel(10.0f, 79.0f, "ENV", 8);
+
 		addPanelLabel(24.0f, 79.0f, "RVB TM", 8);
 		addPanelLabel(38.0f, 79.0f, "RVB FB", 8);
 		addPanelLabel(52.0f, 79.0f, "RVB MIX", 8);
 
-		addPanelLabel(10.0f, 95.0f, "SCAN CV", 7);
-		addPanelLabel(24.0f, 95.0f, "DENS CV", 7);
-		addPanelLabel(38.0f, 95.0f, "SMOTH CV", 7);
-		addPanelLabel(52.0f, 95.0f, "WT CV", 7);
+		addPanelLabel(10.0f, 95.0f, "WT CV", 7);
+		addPanelLabel(24.0f, 95.0f, "MORPH CV", 7);
 
 		addPanelLabel(10.0f, 111.0f, "VOCT", 7);
 		addPanelLabel(24.0f, 111.0f, "TRIG", 7);
@@ -378,7 +426,7 @@ struct SampleVCOWidget : ModuleWidget {
 		}
 
 		menu->addChild(new MenuSeparator());
-		menu->addChild(createMenuLabel("WAV source (first 5s)"));
+		menu->addChild(createMenuLabel("WAV source"));
 		menu->addChild(createMenuItem("Load WAV...", "", [m]() {
 			char* pathC = osdialog_file(OSDIALOG_OPEN, nullptr, nullptr, nullptr);
 			if (!pathC) {

@@ -13,87 +13,86 @@ class WavetableEngine {
 public:
 	static constexpr int kMaxWavetableSize = 4096;
 	static constexpr int kGeneratedWavetableSize = 512;
+	static constexpr int kMorphWaveCount = 20;
 	static constexpr int kMipLevels = 5;
-	static constexpr int kModeCount = 4;
-
-	enum Mode {
-		MODE_FREE = 0,
-		MODE_CYCLE_AC = 1,
-		MODE_CYCLE_ZC = 2,
-		MODE_CYCLE_AVG2 = 3
-	};
 
 	WavetableEngine();
 	~WavetableEngine();
 
-	void init(int wtSize, int dens, int smoth, float scanNorm, int mode);
-	void forceRebuild(int wtSize, int dens, int smoth, float scanNorm, int mode);
+	void init(int wtSize, float scanNorm);
+	void forceRebuild(int wtSize, float scanNorm);
 	void setSource(const std::shared_ptr<const std::vector<float>>& sourcePtr);
-	void setTargets(int wtSize, int dens, int smoth, float scanNorm, int mode);
+	void setTargets(int wtSize, float scanNorm);
+	void setMorphNorm(float morphNorm);
 	void updateControl();
 	void advanceBlend(float sampleTime, float transitionTimeSec);
 
 	float readSample(float ph, float freq, float sampleRate) const;
-	void copyDisplayData(std::array<float, kMaxWavetableSize>& outData, int& outSize, float& outScan) const;
+	void copyDisplayWaves(std::array<std::array<float, kGeneratedWavetableSize>, kMorphWaveCount>& outWaves,
+	                      int& outWaveCount,
+	                      int& outWaveSize,
+	                      float& outScan,
+	                      float& outMorph) const;
 	int getPublishedWtSize() const;
 	float getPublishedScanNorm() const;
-	static const char* modeToShortLabel(int mode);
+	float getPublishedMorphNorm() const;
 
 private:
-	struct WavetableState {
-		std::array<float, kGeneratedWavetableSize> wave {};
-		std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels> mip {};
-		std::array<int, kMipLevels> mipSize {};
+	struct BankSnapshot {
+		std::array<std::array<float, kGeneratedWavetableSize>, kMorphWaveCount> wipWaves {};
+		std::array<std::array<float, kGeneratedWavetableSize>, kMorphWaveCount> audioWaves {};
+		std::array<std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels>, kMorphWaveCount> mip {};
+		std::array<std::array<int, kMipLevels>, kMorphWaveCount> mipSize {};
 		int wtSize = 512;
 		float scanNorm = 0.f;
+		float scanFrac = 0.f;
+		int leftStart = 0;
+		int rightStart = 0;
+		uint64_t sourceRevision = 0;
+		bool valid = false;
 	};
 
 	float sanitizeWaveSample(float v) const;
 	float readWavetableLevelSample(const std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels>& mip,
-	                              const std::array<int, kMipLevels>& mipSizes,
-	                              int level,
-	                              float ph) const;
+	                               const std::array<int, kMipLevels>& mipSizes,
+	                               int level,
+	                               float ph) const;
 	void selectMipLevels(float freq, float sampleRate, int& level0, int& level1, float& blend) const;
 	void rebuildMipmapsFromTable(const std::array<float, kGeneratedWavetableSize>& source,
 	                             std::array<std::array<float, kGeneratedWavetableSize>, kMipLevels>& mipOut,
 	                             std::array<int, kMipLevels>& mipSizesOut);
-	void buildTableState(WavetableState& outState,
-	                    int wtSizeParam,
-	                    int dens,
-	                    int smoth,
-	                    float scanNorm,
-	                    int mode,
-	                    const std::shared_ptr<const std::vector<float>>& sourcePtr);
-	int acquireBuildSlot() const;
-	void submitBuildRequest(int wtSize, int dens, int smoth, float scanNorm, int mode);
+	void buildSnapshot(BankSnapshot& out,
+	                   int wtSize,
+	                   float scanNorm,
+	                   const std::shared_ptr<const std::vector<float>>& sourcePtr,
+	                   uint64_t sourceRev);
+	void submitBuildRequest(int wtSize, float scanNorm, uint64_t sourceRev);
 	void startWorkerThread();
 	void stopWorkerThread();
-	void publishUiDisplayWave();
 
 	mutable std::mt19937 rng {0x4e565f43u};
 
-	std::array<WavetableState, 3> wavetableStates {};
-	std::atomic<int> activeStateIndex {0};
-	std::atomic<int> prevStateIndex {0};
-	std::atomic<int> readyStateIndex {-1};
+	std::shared_ptr<const std::vector<float>> sourceMonoActive;
+	std::atomic<uint64_t> sourceRevision {1};
+
+	std::shared_ptr<BankSnapshot> activeSnapshot;
+	std::shared_ptr<BankSnapshot> prevSnapshot;
+	std::shared_ptr<BankSnapshot> readySnapshot;
+
 	int requestedWtSize = -1;
-	int requestedDense = -1;
-	int requestedSmoth = -1;
 	float requestedScanNorm = -1.f;
-	int requestedMode = MODE_FREE;
+	int requestedScanStartSample = -1;
+
 	std::atomic<int> buildReqWtSize {512};
-	std::atomic<int> buildReqDense {100};
-	std::atomic<int> buildReqSmoth {0};
 	std::atomic<float> buildReqScanNorm {0.f};
-	std::atomic<int> buildReqMode {MODE_FREE};
+	std::atomic<uint64_t> buildReqSourceRevision {0};
 	std::atomic<uint64_t> buildReqRevision {0};
 	std::atomic<bool> workerRunning {false};
 	std::thread workerThread;
 
-	std::shared_ptr<const std::vector<float>> sourceMonoActive;
-	std::array<std::array<float, kGeneratedWavetableSize>, 2> uiDisplayWave {};
-	std::atomic<int> uiDisplayWaveIndex {0};
-	std::atomic<float> uiScanNorm {0.f};
-	std::atomic<int> uiWtSize {512};
+	std::atomic<float> morphNorm {0.f};
 	std::atomic<float> tableBlend {1.f};
+	std::atomic<int> uiWtSize {512};
+	std::atomic<float> uiScanNorm {0.f};
+	std::atomic<float> uiMorphNorm {0.f};
 };

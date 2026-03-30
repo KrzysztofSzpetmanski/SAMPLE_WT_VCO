@@ -14,8 +14,10 @@
 struct SampleVCO : Module {
 	static constexpr int kMaxWavetableSize = WavetableEngine::kMaxWavetableSize;
 	static constexpr int kGeneratedWavetableSize = WavetableEngine::kGeneratedWavetableSize;
-	static constexpr float kTableTransitionTimeSec = 0.3f;
-	static constexpr float kControlUpdateIntervalSec = 0.002f;
+	static constexpr int kMorphWaveCount = WavetableEngine::kMorphWaveCount;
+	static constexpr int kBuildNumber = 100;
+	static constexpr float kTableTransitionTimeSec = 0.02f;
+	static constexpr float kControlUpdateIntervalSec = 0.01f;
 	static constexpr int kMaxVoices = 10;
 
 	enum ParamIds {
@@ -23,10 +25,9 @@ struct SampleVCO : Module {
 		DETUNE_PARAM,
 		UNISON_PARAM,
 		OCTAVE_PARAM,
-		MORPH_PARAM,
+		SCAN_PARAM,
 		WT_SIZE_PARAM,
-		DENS_PARAM,
-		SMOTH_PARAM,
+		MORPH_PARAM,
 		ENV_PARAM,
 		RVB_TIME_PARAM,
 		RVB_FB_PARAM,
@@ -34,9 +35,6 @@ struct SampleVCO : Module {
 
 		MORPH_CV_DEPTH_PARAM,
 		WT_SIZE_CV_DEPTH_PARAM,
-		DENS_CV_DEPTH_PARAM,
-		SMOTH_CV_DEPTH_PARAM,
-		MODE_PUSH_PARAM,
 		NUM_PARAMS
 	};
 	enum InputIds {
@@ -44,8 +42,6 @@ struct SampleVCO : Module {
 		TRIG_INPUT,
 		MORPH_CV_INPUT,
 		WT_SIZE_CV_INPUT,
-		DENS_CV_INPUT,
-		SMOTH_CV_INPUT,
 		NUM_INPUTS
 	};
 	enum OutputIds {
@@ -64,13 +60,17 @@ struct SampleVCO : Module {
 	bool loadSourceWavPath(const std::string& path);
 	void clearSourceWav();
 	std::string getSourceStatusString() const;
+	bool hasLoadedSource() const;
 	void copySourceOverviewData(std::array<float, kMaxWavetableSize>& outData,
 	                           int& outSize,
 	                           float& outWindowStartNorm,
 	                           float& outWindowSpanNorm) const;
-	void copyDisplayData(std::array<float, kMaxWavetableSize>& outData, int& outSize, float& outScan) const;
+	void copyDisplayWaves(std::array<std::array<float, kGeneratedWavetableSize>, kMorphWaveCount>& outWaves,
+	                      int& outWaveCount,
+	                      int& outWaveSize,
+	                      float& outScan,
+	                      float& outMorph) const;
 	int getPublishedWtSize() const;
-	const char* getWorkModeLabel() const;
 	float getModulatedKnobValue(float baseValue, int cvInputId, int depthParamId, float minV, float maxV);
 
 	void onReset() override;
@@ -80,22 +80,20 @@ struct SampleVCO : Module {
 
 private:
 	float computeScanParam();
+	float computeMorphParam();
 	int computeWavetableSize();
-	int computeDenseParam();
-	int computeSmothParam();
 	float computeEnvParam();
 	float processEnvEnvelope(float trigVoltage, bool trigPatched, float env, float sampleTime);
-	void updateModeSwitch();
 	void updateTablesIfNeeded();
 	static float sanitizeAudioOut(float v);
 
 	dsp::SchmittTrigger contourTrigger;
-	dsp::SchmittTrigger modeButtonTrigger;
 	std::array<float, kMaxVoices> phase {};
 	float controlUpdateTimer = 0.f;
 	float contourEnvelope = 1.f;
 	float previousSampleRate = 0.f;
-	int workMode = WavetableEngine::MODE_FREE;
+	float scanSmoothed = 0.f;
+	bool scanSmootherInit = false;
 
 	WavetableEngine wavetableEngine;
 	reverb_stage::ReverbStage reverbStage;
