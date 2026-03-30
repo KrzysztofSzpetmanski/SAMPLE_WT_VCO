@@ -1,4 +1,4 @@
-# KSZ Sample VCO
+# SAMPLE WT VCO
 
 VCV Rack 2 plugin: VCO oparty o wavetable, gdzie źródłem danych jest zwykły plik WAV (maks. pierwsze 5 sekund).
 

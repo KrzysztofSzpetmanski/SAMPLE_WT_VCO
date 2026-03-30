@@ -14,6 +14,6 @@
   <line x1="2" y1="85.2" x2="60.65" y2="85.2" stroke="#334155" stroke-width="0.5" />
   <line x1="31.3" y1="85.2" x2="31.3" y2="127.0" stroke="#94a3b8" stroke-width="0.35" />
 
-  <text x="31.3" y="8.1" text-anchor="middle" fill="#0f172a" font-size="3.1" font-family="DejaVu Sans">KSZ NOISE WT VCO</text>
-  <text x="31.3" y="16.8" text-anchor="middle" fill="#1f2937" font-size="2.4" font-family="DejaVu Sans">RACK WAVETABLE OSC</text>
+  <text x="31.3" y="8.1" text-anchor="middle" fill="#0f172a" font-size="3.1" font-family="DejaVu Sans">SAMPLE WT VCO</text>
+  <text x="31.3" y="16.8" text-anchor="middle" fill="#1f2937" font-size="2.4" font-family="DejaVu Sans">RACK SAMPLE OSC</text>
 </svg>

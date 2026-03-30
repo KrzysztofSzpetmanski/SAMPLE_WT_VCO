@@ -1,15 +1,15 @@
 {
-  "slug": "WaveFileVCO",
-  "name": "KSZ Sample VCO",
-  "version": "2.0.102",
+  "slug": "SampleWtVCO",
+  "name": "SAMPLE WT VCO",
+  "version": "2.0.103",
   "license": "proprietary",
   "brand": "KSZ",
   "author": "lazuli",
   "modules": [
     {
-      "slug": "WaveFileVCO",
-      "name": "Sample VCO",
-      "description": "Wavetable VCO sourced from regular WAV audio files (first 5s)",
+      "slug": "SampleWtVCO",
+      "name": "SAMPLE WT VCO",
+      "description": "Wavetable VCO sourced from regular WAV audio files",
       "tags": [
         "Oscillator",
         "Wavetable",

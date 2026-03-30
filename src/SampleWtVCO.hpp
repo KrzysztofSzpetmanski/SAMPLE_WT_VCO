@@ -11,11 +11,11 @@
 #include <string>
 #include <vector>
 
-struct SampleVCO : Module {
+struct SampleWtVCO : Module {
 	static constexpr int kMaxWavetableSize = WavetableEngine::kMaxWavetableSize;
 	static constexpr int kGeneratedWavetableSize = WavetableEngine::kGeneratedWavetableSize;
 	static constexpr int kMorphWaveCount = WavetableEngine::kMorphWaveCount;
-	static constexpr int kBuildNumber = 102;
+	static constexpr int kBuildNumber = 103;
 	static constexpr int kWalkStepSamples = 512;
 	static constexpr float kTableTransitionTimeSec = 0.02f;
 	static constexpr float kControlUpdateIntervalSec = 0.01f;
@@ -61,7 +61,7 @@ struct SampleVCO : Module {
 		NUM_LIGHTS
 	};
 
-	SampleVCO();
+	SampleWtVCO();
 
 	bool loadSourceWavPath(const std::string& path);
 	void clearSourceWav();
@@ -119,4 +119,4 @@ private:
 	mutable std::mutex sourceMetaMutex;
 };
 
-extern Model* modelWaveFileVCO;
+extern Model* modelSampleWtVCO;

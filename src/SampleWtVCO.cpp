@@ -1,4 +1,4 @@
-#include "SampleVCO.hpp"
+#include "SampleWtVCO.hpp"
 
 #include "sample_loader.hpp"
 
@@ -45,7 +45,7 @@ struct ReverbTimeSecondsQuantity : rack::engine::ParamQuantity {
 	}
 };
 
-SampleVCO::SampleVCO() {
+SampleWtVCO::SampleWtVCO() {
 	config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
 
 	configInput(VOCT_INPUT, "V/Oct");
@@ -92,14 +92,14 @@ SampleVCO::SampleVCO() {
 	reverbStage.reset(48000.f);
 }
 
-float SampleVCO::sanitizeAudioOut(float v) {
+float SampleWtVCO::sanitizeAudioOut(float v) {
 	if (!std::isfinite(v)) {
 		return 0.f;
 	}
 	return clamp(v, -10.f, 10.f);
 }
 
-float SampleVCO::getModulatedKnobValue(float baseValue, int cvInputId, int depthParamId, float minV, float maxV) {
+float SampleWtVCO::getModulatedKnobValue(float baseValue, int cvInputId, int depthParamId, float minV, float maxV) {
 	float depth = clamp(params[depthParamId].getValue(), 0.f, 1.f);
 	float v = baseValue;
 	if (inputs[cvInputId].isConnected()) {
@@ -110,15 +110,15 @@ float SampleVCO::getModulatedKnobValue(float baseValue, int cvInputId, int depth
 	return clamp(v, minV, maxV);
 }
 
-float SampleVCO::computeScanParam() {
+float SampleWtVCO::computeScanParam() {
 	return clamp(params[SCAN_PARAM].getValue(), 0.f, 1.f);
 }
 
-float SampleVCO::computeMorphParam() {
+float SampleWtVCO::computeMorphParam() {
 	return getModulatedKnobValue(params[MORPH_PARAM].getValue(), MORPH_CV_INPUT, MORPH_CV_DEPTH_PARAM, 0.f, 1.f);
 }
 
-float SampleVCO::computeWalkTimeParam() {
+float SampleWtVCO::computeWalkTimeParam() {
 	return getModulatedKnobValue(params[WALK_TIME_PARAM].getValue(),
 	                             WALK_TIME_CV_INPUT,
 	                             WALK_TIME_CV_DEPTH_PARAM,
@@ -126,7 +126,7 @@ float SampleVCO::computeWalkTimeParam() {
 	                             10.f);
 }
 
-int SampleVCO::computeWavetableSize() {
+int SampleWtVCO::computeWavetableSize() {
 	float v = getModulatedKnobValue(params[WT_SIZE_PARAM].getValue(), WT_SIZE_CV_INPUT,
 	                                WT_SIZE_CV_DEPTH_PARAM,
 	                                static_cast<float>(WavetableEngine::kMinWtSize),
@@ -134,11 +134,11 @@ int SampleVCO::computeWavetableSize() {
 	return clamp(static_cast<int>(std::round(v)), WavetableEngine::kMinWtSize, 512);
 }
 
-float SampleVCO::computeEnvParam() {
+float SampleWtVCO::computeEnvParam() {
 	return clamp(params[ENV_PARAM].getValue(), 0.f, 1.f);
 }
 
-float SampleVCO::processEnvEnvelope(float trigVoltage, bool trigPatched, float env, float sampleTime) {
+float SampleWtVCO::processEnvEnvelope(float trigVoltage, bool trigPatched, float env, float sampleTime) {
 	if (!trigPatched || env >= 0.999f) {
 		contourEnvelope = 1.f;
 		return contourEnvelope;
@@ -177,7 +177,7 @@ float SampleVCO::processEnvEnvelope(float trigVoltage, bool trigPatched, float e
 	return contourEnvelope;
 }
 
-bool SampleVCO::loadSourceWavPath(const std::string& path) {
+bool SampleWtVCO::loadSourceWavPath(const std::string& path) {
 	std::vector<float> mono;
 	float sr = 0.f;
 	std::string err;
@@ -210,7 +210,7 @@ bool SampleVCO::loadSourceWavPath(const std::string& path) {
 	return true;
 }
 
-void SampleVCO::clearSourceWav() {
+void SampleWtVCO::clearSourceWav() {
 	std::shared_ptr<const std::vector<float>> empty;
 	std::atomic_store_explicit(&sourceMonoPending, empty, std::memory_order_release);
 	std::atomic_store_explicit(&sourceMonoUi, empty, std::memory_order_release);
@@ -224,7 +224,7 @@ void SampleVCO::clearSourceWav() {
 	sourcePendingDirty.store(true, std::memory_order_relaxed);
 }
 
-std::string SampleVCO::getSourceStatusString() const {
+std::string SampleWtVCO::getSourceStatusString() const {
 	if (!hasLoadedSource()) {
 		return "NO FILE LOADED";
 	}
@@ -239,12 +239,12 @@ std::string SampleVCO::getSourceStatusString() const {
 	return sourcePath.substr(sep + 1);
 }
 
-bool SampleVCO::hasLoadedSource() const {
+bool SampleWtVCO::hasLoadedSource() const {
 	auto sourcePtr = std::atomic_load_explicit(&sourceMonoUi, std::memory_order_acquire);
 	return sourcePtr && !sourcePtr->empty() && sourceLoaded.load(std::memory_order_relaxed);
 }
 
-void SampleVCO::copySourceOverviewData(std::array<float, kMaxWavetableSize>& outData,
+void SampleWtVCO::copySourceOverviewData(std::array<float, kMaxWavetableSize>& outData,
                                        int& outSize,
                                        float& outWindowStartNorm,
                                        float& outWindowSpanNorm) const {
@@ -279,7 +279,7 @@ void SampleVCO::copySourceOverviewData(std::array<float, kMaxWavetableSize>& out
 	}
 }
 
-void SampleVCO::copyDisplayWaves(std::array<std::array<float, kGeneratedWavetableSize>, kMorphWaveCount>& outWaves,
+void SampleWtVCO::copyDisplayWaves(std::array<std::array<float, kGeneratedWavetableSize>, kMorphWaveCount>& outWaves,
                                  int& outWaveCount,
                                  int& outWaveSize,
                                  float& outScan,
@@ -287,11 +287,11 @@ void SampleVCO::copyDisplayWaves(std::array<std::array<float, kGeneratedWavetabl
 	wavetableEngine.copyDisplayWaves(outWaves, outWaveCount, outWaveSize, outScan, outMorph);
 }
 
-int SampleVCO::getPublishedWtSize() const {
+int SampleWtVCO::getPublishedWtSize() const {
 	return wavetableEngine.getPublishedWtSize();
 }
 
-void SampleVCO::onReset() {
+void SampleWtVCO::onReset() {
 	for (float& p : phase) {
 		p = 0.f;
 	}
@@ -311,7 +311,7 @@ void SampleVCO::onReset() {
 	reverbStage.reset(sr);
 }
 
-json_t* SampleVCO::dataToJson() {
+json_t* SampleWtVCO::dataToJson() {
 	json_t* rootJ = json_object();
 	{
 		std::lock_guard<std::mutex> lock(sourceMetaMutex);
@@ -323,7 +323,7 @@ json_t* SampleVCO::dataToJson() {
 	return rootJ;
 }
 
-void SampleVCO::dataFromJson(json_t* rootJ) {
+void SampleWtVCO::dataFromJson(json_t* rootJ) {
 	json_t* sourcePathJ = json_object_get(rootJ, "sourcePath");
 	if (json_is_string(sourcePathJ)) {
 		loadSourceWavPath(json_string_value(sourcePathJ));
@@ -343,7 +343,7 @@ void SampleVCO::dataFromJson(json_t* rootJ) {
 	params[WALK_BUTTON_PARAM].setValue(0.f);
 }
 
-void SampleVCO::stepWalkScan() {
+void SampleWtVCO::stepWalkScan() {
 	if (!hasLoadedSource()) {
 		return;
 	}
@@ -368,7 +368,7 @@ void SampleVCO::stepWalkScan() {
 	params[SCAN_PARAM].setValue(clamp(nextScan, 0.f, 1.f));
 }
 
-void SampleVCO::updateTablesIfNeeded() {
+void SampleWtVCO::updateTablesIfNeeded() {
 	if (sourcePendingDirty.exchange(false, std::memory_order_relaxed)) {
 		auto pending = std::atomic_load_explicit(&sourceMonoPending, std::memory_order_acquire);
 		wavetableEngine.setSource(pending);
@@ -400,7 +400,7 @@ void SampleVCO::updateTablesIfNeeded() {
 	wavetableEngine.updateControl();
 }
 
-void SampleVCO::process(const ProcessArgs& args) {
+void SampleWtVCO::process(const ProcessArgs& args) {
 	if (walkButtonTrigger.process(params[WALK_BUTTON_PARAM].getValue())) {
 		walkEnabled = !walkEnabled;
 		if (!walkEnabled) {

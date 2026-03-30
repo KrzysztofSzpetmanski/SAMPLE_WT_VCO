@@ -21,7 +21,7 @@
 - Usunięte kosztowne kopiowanie całego bufora 5s przy każdej regeneracji WT.
 - Usunięte race-condition na flagach między UI i audio (`pendingGenRequest`, `tableBlend`).
 - Usunięte martwe elementy po starym układzie (`JUMP/GEN`, stare helpery DENS).
-- Uporządkowane nazewnictwo kodu do `SampleVCO` i panelu `res/SampleVCO.svg`.
+- Uporządkowane nazewnictwo kodu do `SampleWtVCO` i panelu `res/SampleWtVCO.svg`.
 
 ## Otwarte tematy
 - Dalsze strojenie mapowania `DENS/SMOTH` pod odsłuch i zakresy muzyczne.

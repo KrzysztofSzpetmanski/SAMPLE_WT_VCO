@@ -1,7 +1,7 @@
 # Setup
 
 ## Cel
-Przygotowanie lokalnego środowiska dla projektu `WaveFileVCO` (VCV Rack 2 plugin).
+Przygotowanie lokalnego środowiska dla projektu `SampleWtVCO` (VCV Rack 2 plugin).
 
 ## Wymagania
 - macOS/Linux shell

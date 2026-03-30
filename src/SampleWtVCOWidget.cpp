@@ -1,4 +1,4 @@
-#include "SampleVCO.hpp"
+#include "SampleWtVCO.hpp"
 
 #include <array>
 #include <cmath>
@@ -31,7 +31,7 @@ struct PanelLabel : TransparentWidget {
 };
 
 struct SourceOverviewDisplay : TransparentWidget {
-	SampleVCO* moduleRef = nullptr;
+	SampleWtVCO* moduleRef = nullptr;
 
 	void draw(const DrawArgs& args) override {
 		nvgBeginPath(args.vg);
@@ -49,7 +49,7 @@ struct SourceOverviewDisplay : TransparentWidget {
 			return;
 		}
 
-		std::array<float, SampleVCO::kMaxWavetableSize> src {};
+		std::array<float, SampleWtVCO::kMaxWavetableSize> src {};
 		int size = 0;
 		float windowStartNorm = 0.f;
 		float windowSpanNorm = 0.f;
@@ -97,7 +97,7 @@ struct SourceOverviewDisplay : TransparentWidget {
 };
 
 struct WavetableDisplay : TransparentWidget {
-	SampleVCO* moduleRef = nullptr;
+	SampleWtVCO* moduleRef = nullptr;
 
 	void draw(const DrawArgs& args) override {
 		nvgBeginPath(args.vg);
@@ -126,7 +126,7 @@ struct WavetableDisplay : TransparentWidget {
 			return;
 		}
 
-		std::array<std::array<float, SampleVCO::kGeneratedWavetableSize>, SampleVCO::kMorphWaveCount> waves {};
+		std::array<std::array<float, SampleWtVCO::kGeneratedWavetableSize>, SampleWtVCO::kMorphWaveCount> waves {};
 		int waveCount = 0;
 		int waveSize = 0;
 		float scanNorm = 0.f;
@@ -222,7 +222,7 @@ struct WavetableDisplay : TransparentWidget {
 };
 
 struct CvDepthKnob : RoundSmallBlackKnob {
-	SampleVCO* moduleRef = nullptr;
+	SampleWtVCO* moduleRef = nullptr;
 	int depthParam = -1;
 	int cvInput = -1;
 	std::string depthMenuLabel = "CV depth";
@@ -330,10 +330,10 @@ struct CvDepthKnob : RoundSmallBlackKnob {
 	}
 };
 
-struct SampleVCOWidget : ModuleWidget {
-	SampleVCOWidget(SampleVCO* module) {
+struct SampleWtVCOWidget : ModuleWidget {
+	SampleWtVCOWidget(SampleWtVCO* module) {
 		setModule(module);
-		setPanel(createPanel(asset::plugin(pluginInstance, "res/SampleVCO.svg")));
+		setPanel(createPanel(asset::plugin(pluginInstance, "res/SampleWtVCO.svg")));
 
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
@@ -350,49 +350,49 @@ struct SampleVCOWidget : ModuleWidget {
 		wtDisplay->moduleRef = module;
 		addChild(wtDisplay);
 
-		auto* morphKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 31.5f)), module, SampleVCO::MORPH_PARAM);
+		auto* morphKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 31.5f)), module, SampleWtVCO::MORPH_PARAM);
 		morphKnob->moduleRef = module;
-		morphKnob->depthParam = SampleVCO::MORPH_CV_DEPTH_PARAM;
-		morphKnob->cvInput = SampleVCO::MORPH_CV_INPUT;
+		morphKnob->depthParam = SampleWtVCO::MORPH_CV_DEPTH_PARAM;
+		morphKnob->cvInput = SampleWtVCO::MORPH_CV_INPUT;
 		morphKnob->depthMenuLabel = "MORPH CV depth";
 		addParam(morphKnob);
 
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 53.0f)), module, SampleVCO::PITCH_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 53.0f)), module, SampleVCO::DETUNE_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 53.0f)), module, SampleVCO::UNISON_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 53.0f)), module, SampleVCO::OCTAVE_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 53.0f)), module, SampleWtVCO::PITCH_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 53.0f)), module, SampleWtVCO::DETUNE_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 53.0f)), module, SampleWtVCO::UNISON_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 53.0f)), module, SampleWtVCO::OCTAVE_PARAM));
 
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 69.0f)), module, SampleVCO::SCAN_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 69.0f)), module, SampleWtVCO::SCAN_PARAM));
 
-		auto* sizeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(24.0f, 69.0f)), module, SampleVCO::WT_SIZE_PARAM);
+		auto* sizeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(24.0f, 69.0f)), module, SampleWtVCO::WT_SIZE_PARAM);
 		sizeKnob->moduleRef = module;
-		sizeKnob->depthParam = SampleVCO::WT_SIZE_CV_DEPTH_PARAM;
-		sizeKnob->cvInput = SampleVCO::WT_SIZE_CV_INPUT;
+		sizeKnob->depthParam = SampleWtVCO::WT_SIZE_CV_DEPTH_PARAM;
+		sizeKnob->cvInput = SampleWtVCO::WT_SIZE_CV_INPUT;
 		sizeKnob->depthMenuLabel = "WT SIZE CV depth";
 		addParam(sizeKnob);
-		addParam(createParamCentered<TL1105>(mm2px(Vec(38.0f, 69.0f)), module, SampleVCO::WALK_BUTTON_PARAM));
-		addChild(createLightCentered<MediumLight<GreenLight>>(mm2px(Vec(45.0f, 69.0f)), module, SampleVCO::WALK_LIGHT));
+		addParam(createParamCentered<TL1105>(mm2px(Vec(38.0f, 69.0f)), module, SampleWtVCO::WALK_BUTTON_PARAM));
+		addChild(createLightCentered<MediumLight<GreenLight>>(mm2px(Vec(45.0f, 69.0f)), module, SampleWtVCO::WALK_LIGHT));
 
-		auto* walkTimeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 69.0f)), module, SampleVCO::WALK_TIME_PARAM);
+		auto* walkTimeKnob = createParamCentered<CvDepthKnob>(mm2px(Vec(52.0f, 69.0f)), module, SampleWtVCO::WALK_TIME_PARAM);
 		walkTimeKnob->moduleRef = module;
-		walkTimeKnob->depthParam = SampleVCO::WALK_TIME_CV_DEPTH_PARAM;
-		walkTimeKnob->cvInput = SampleVCO::WALK_TIME_CV_INPUT;
+		walkTimeKnob->depthParam = SampleWtVCO::WALK_TIME_CV_DEPTH_PARAM;
+		walkTimeKnob->cvInput = SampleWtVCO::WALK_TIME_CV_INPUT;
 		walkTimeKnob->depthMenuLabel = "WALK TIME CV depth";
 		addParam(walkTimeKnob);
 
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 85.0f)), module, SampleVCO::ENV_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 85.0f)), module, SampleVCO::RVB_TIME_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 85.0f)), module, SampleVCO::RVB_FB_PARAM));
-		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 85.0f)), module, SampleVCO::RVB_MIX_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(10.0f, 85.0f)), module, SampleWtVCO::ENV_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(24.0f, 85.0f)), module, SampleWtVCO::RVB_TIME_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(38.0f, 85.0f)), module, SampleWtVCO::RVB_FB_PARAM));
+		addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(52.0f, 85.0f)), module, SampleWtVCO::RVB_MIX_PARAM));
 
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 101.0f)), module, SampleVCO::WT_SIZE_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 101.0f)), module, SampleVCO::MORPH_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(38.0f, 101.0f)), module, SampleVCO::WALK_TIME_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 101.0f)), module, SampleWtVCO::WT_SIZE_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 101.0f)), module, SampleWtVCO::MORPH_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(38.0f, 101.0f)), module, SampleWtVCO::WALK_TIME_CV_INPUT));
 
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 117.0f)), module, SampleVCO::VOCT_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 117.0f)), module, SampleVCO::TRIG_INPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(38.0f, 117.0f)), module, SampleVCO::LEFT_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(52.0f, 117.0f)), module, SampleVCO::RIGHT_OUTPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0f, 117.0f)), module, SampleWtVCO::VOCT_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(24.0f, 117.0f)), module, SampleWtVCO::TRIG_INPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(38.0f, 117.0f)), module, SampleWtVCO::LEFT_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(52.0f, 117.0f)), module, SampleWtVCO::RIGHT_OUTPUT));
 
 		auto addPanelLabel = [this](float xMm, float yMm, const std::string& txt, int size = 8, NVGcolor color = nvgRGB(0x0f, 0x17, 0x2a)) {
 			auto* l = createWidget<PanelLabel>(mm2px(Vec(xMm, yMm)));
@@ -402,8 +402,8 @@ struct SampleVCOWidget : ModuleWidget {
 			addChild(l);
 		};
 
-		addPanelLabel(30.5f, 8.0f, "SAMPLE VCO", 10, nvgRGB(0x0b, 0x12, 0x20));
-		addPanelLabel(52.0f, 10.0f, rack::string::f("BUILD %d", SampleVCO::kBuildNumber), 7);
+		addPanelLabel(30.5f, 8.0f, "SAMPLE WT VCO", 10, nvgRGB(0x0b, 0x12, 0x20));
+		addPanelLabel(52.0f, 10.0f, rack::string::f("BUILD %d", SampleWtVCO::kBuildNumber), 7);
 		addPanelLabel(52.0f, 24.0f, "MORPH", 8);
 
 		addPanelLabel(10.0f, 47.0f, "PITCH", 7, nvgRGB(0x1f, 0x29, 0x37));
@@ -433,7 +433,7 @@ struct SampleVCOWidget : ModuleWidget {
 
 	void appendContextMenu(Menu* menu) override {
 		ModuleWidget::appendContextMenu(menu);
-		auto* m = dynamic_cast<SampleVCO*>(module);
+		auto* m = dynamic_cast<SampleWtVCO*>(module);
 		if (!m) {
 			return;
 		}
@@ -456,4 +456,4 @@ struct SampleVCOWidget : ModuleWidget {
 	}
 };
 
-Model* modelWaveFileVCO = createModel<SampleVCO, SampleVCOWidget>("WaveFileVCO");
+Model* modelSampleWtVCO = createModel<SampleWtVCO, SampleWtVCOWidget>("SampleWtVCO");
