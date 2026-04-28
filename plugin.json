@@ -1,5 +1,5 @@
 {
-  "slug": "SampleWtVCO",
+  "slug": "SAMPLE_WT_VCO",
   "name": "SAMPLE WT VCO",
   "version": "2.0.103",
   "license": "proprietary",
@@ -7,7 +7,7 @@
   "author": "lazuli",
   "modules": [
     {
-      "slug": "SampleWtVCO",
+      "slug": "SAMPLE_WT_VCO",
       "name": "SAMPLE WT VCO",
       "description": "Wavetable VCO sourced from regular WAV audio files",
       "tags": [
